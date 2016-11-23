@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <string>
 
 #include <boost/program_options.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -125,21 +126,20 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
                     opts.test.seeds.emplace_back(p_config_seeds.string());
                 }
             } else {
-                for(const auto& item : test.get_child("items"))
+                auto opt_items = test.get_child_optional("items");
+
+                if(opt_items)
                 {
-                    if(item.first != "item")
+                    for(const auto& item : *opt_items)
                     {
-                        BOOST_THROW_EXCEPTION(Exception{} << err::msg{"unexpected element"}
-                        << err::parse{"crete.test.items.item"});
+                        if(item.first != "item")
+                        {
+                            BOOST_THROW_EXCEPTION(Exception{} << err::msg{"unexpected element"}
+                                                  << err::parse{"crete.test.items.item"});
+                        }
+
+                        opts.test.items.emplace_back(item.second.get_value<std::string>());
                     }
-
-                    opts.test.items.emplace_back(item.second.get_value<std::string>());
-                }
-
-                if(opts.test.items.size() == 0)
-                {
-                    BOOST_THROW_EXCEPTION(Exception{} << err::arg_missing{"crete.test.items.item"}
-                    << err::parse{"Must provide at least one item to test in '" + opts.mode.name + "' mode"});
                 }
             }
         }
@@ -230,6 +230,9 @@ auto DispatchUI::make_options() -> po::options_description
             ("help,h", "displays help message")
             ("port,p", po::value<Port>(), "master port")
             ("config,c", po::value<fs::path>(), "[required] configuration file")
+            ("archive,a", po::value<fs::path>(), "archive (zip) file containing necessary files for testing")
+            ("item,i", po::value<fs::path>(), "target test configuration file")
+            ("time-out,t", po::value<uint64_t>(), "time interval (seconds) to test each item")
         ;
 
     return desc;
@@ -288,6 +291,27 @@ auto DispatchUI::process_options() -> void
     else // Default port
     {
         master_port_ = default_master_port;
+    }
+    if(var_map_.count("archive"))
+    {
+        auto path = var_map_["archive"].as<fs::path>();
+
+        CRETE_EXCEPTION_ASSERT(fs::exists(path),
+                               err::file_missing{path.string()});
+
+        options_.test.archive.path = path.string();
+    }
+    if(var_map_.count("item"))
+    {
+        options_.test.items.emplace_back(var_map_["item"].as<fs::path>().string());
+    }
+    else if(options_.test.items.empty())
+    {
+        CRETE_EXCEPTION_ASSERT(!options_.test.items.empty(), err::msg{"no target items given"});
+    }
+    if(var_map_.count("time-out"))
+    {
+        options_.test.interval.time = var_map_["time-out"].as<uint64_t>();
     }
 }
 

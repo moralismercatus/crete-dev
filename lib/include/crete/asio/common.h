@@ -72,6 +72,7 @@ const uint32_t chunk = 27;
 const uint32_t file_stream = 28;
 const uint32_t cluster_request_guest_data = 29;
 const uint32_t cluster_tx_guest_data = 30;
+const uint32_t cluster_tx_test_target_archive = 31;
 }
 
 struct PacketInfo
