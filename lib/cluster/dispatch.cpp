@@ -113,6 +113,7 @@ public:
     // +--------------------------------------------------+
     struct init;
     struct tx_config;
+    struct tx_test_archive;
     struct update_image_info;
     struct update_image;
     struct rx_guest_data;
@@ -156,9 +157,13 @@ public:
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<Start             ,start             ,TxConfig          ,init                 ,none                 >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<TxConfig          ,config            ,ValidateImage     ,tx_config            ,And_<is_distributed,
+      Row<TxConfig          ,config            ,ValidateImage     ,ActionSequence_<mpl::vector<
+                                                                       tx_config,
+                                                                       tx_test_archive>>,And_<is_distributed,
                                                                                               do_update>      >,
-      Row<TxConfig          ,config            ,Commence          ,tx_config            ,And_<is_distributed,
+      Row<TxConfig          ,config            ,Commence          ,ActionSequence_<mpl::vector<
+                                                                       tx_config,
+                                                                       tx_test_archive>>,And_<is_distributed,
                                                                                               Not_<do_update>> >,
       Row<TxConfig          ,config            ,Commence          ,tx_config            ,Not_<is_distributed> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -498,7 +503,14 @@ struct VMNodeFSM_::tx_config
     {
         transmit_config(fsm.node_,
                         ev.options_);
+    }
+};
 
+struct VMNodeFSM_::tx_test_archive
+{
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
+    {
         // TODO: spin off into worker thread.
         // TODO: the code for image and archive is nearly identical. Abstract it.
         if(!ev.options_.test.archive.path.empty())
