@@ -45,6 +45,19 @@ struct Interval
     }
 };
 
+struct Archive
+{
+    std::string path;
+
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int version)
+    {
+        (void)version;
+
+        ar & path;
+    }
+};
+
 struct Test
 {
     typedef std::vector<std::string> Items;
@@ -53,6 +66,7 @@ struct Test
     Interval interval;
     Items items;
     Seeds seeds;
+    Archive archive;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version)

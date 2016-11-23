@@ -78,6 +78,7 @@ auto VMNode::poll() -> void
                         node_options_,
                         pwd,
                         image_path(),
+                        test_target_archive_path(),
                         false,
                         target_
             };
@@ -144,6 +145,7 @@ auto VMNode::start_FSMs() -> void
         node_options_,
         vm_path,
         image_path(),
+        test_target_archive_path(),
         false,
         target_
     };
@@ -232,6 +234,11 @@ auto VMNode::image_path() -> fs::path
     return pwd_ / node_image_dir / image_name;
 }
 
+auto VMNode::test_target_archive_path() -> fs::path
+{
+    return pwd_ / node_guest_data_dir / node_test_target_archive_name;
+}
+
 auto VMNode::reset() -> void
 {
     using namespace node::vm;
@@ -306,6 +313,13 @@ auto process(AtomicGuard<VMNode>& node,
     {
         transmit_guest_data(node,
                             request.client_);
+
+        return true;
+    }
+    case packet_type::cluster_tx_test_target_archive:
+    {
+        receive_test_target_archive(node,
+                                    request.client_);
 
         return true;
     }
@@ -403,6 +417,29 @@ auto receive_target(AtomicGuard<VMNode>& node,
                            target);
 
     node.acquire()->target(target);
+}
+
+auto receive_test_target_archive(AtomicGuard<VMNode>& node,
+                                 Client& client) -> void
+{
+    auto archive_path = node.acquire()->test_target_archive_path();
+
+    if(!fs::exists(archive_path.parent_path()))
+    {
+        fs::create_directories(archive_path.parent_path());
+    }
+
+    if(fs::exists(archive_path))
+    {
+        fs::remove(archive_path);
+    }
+
+    fs::ofstream ofs{archive_path};
+
+    CRETE_EXCEPTION_ASSERT(ofs.good(), err::file_open_failed{archive_path.string()});
+
+    read(client,
+         ofs);
 }
 
 auto VMNode::add_instance() -> void

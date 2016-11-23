@@ -66,18 +66,21 @@ struct start // Basically, serves as constructor.
                    node_options,
                    vm_dir,
                    "",
+                   "",
                    false,
                    ""} {}
     start(const cluster::option::Dispatch& dispatch_options,
           const node::option::VMNode& node_options,
           const fs::path& vm_dir,
           const fs::path& image_path,
+          const fs::path& test_target_archive,
           bool first_vm,
           const std::string& target)
         : dispatch_options_(dispatch_options) // TODO: seems to be an error in Clang 3.2 initializer syntax. Workaround: using parenthesese.
         , node_options_{node_options}
         , vm_dir_{vm_dir}
         , image_path_{image_path}
+        , test_target_archive_{test_target_archive}
         , first_vm_{first_vm}
         , target_{target} {}
 
@@ -85,6 +88,7 @@ struct start // Basically, serves as constructor.
     node::option::VMNode node_options_;
     fs::path vm_dir_;
     fs::path image_path_;
+    fs::path test_target_archive_;
     bool first_vm_;
     std::string target_;
 };
@@ -262,6 +266,7 @@ private:
     node::option::VMNode node_options_;
     fs::path vm_dir_;
     fs::path new_image_path_;
+    fs::path test_target_archive_;
     boost::thread image_updater_thread_;
     std::shared_ptr<fs::path> trace_{std::make_shared<fs::path>()}; // To be read when is_flag_active<trace_ready>() == true.
     std::shared_ptr<AtomicGuard<bp::child>> child_{std::make_shared<AtomicGuard<bp::child>>(-1, bp::detail::file_handle(), bp::detail::file_handle(), bp::detail::file_handle())};
@@ -538,6 +543,7 @@ struct QemuFSM_::init
         fsm.dispatch_options_ = ev.dispatch_options_;
         fsm.node_options_ = ev.node_options_;
         fsm.new_image_path_ = ev.image_path_;
+        fsm.test_target_archive_ = ev.test_target_archive_;
         fsm.first_vm_ = ev.first_vm_;
         fsm.target_ = ev.target_;
 
@@ -831,7 +837,8 @@ struct QemuFSM_::connect_vm
         ts.async_task_.reset(new AsyncTask{[](std::shared_ptr<Server> server,
                                               const fs::path vm_dir,
                                               const bool distributed,
-                                              const std::string target)
+                                              const std::string target,
+                                              const fs::path test_target_archive)
         {
             auto new_port = server->port();
 
@@ -869,17 +876,38 @@ struct QemuFSM_::connect_vm
 
                 if(distributed)
                 {
-                    pkinfo.type = packet_type::cluster_next_target;
-                    write_serialized_text(*server,
-                                          pkinfo,
-                                          target);
+                    {
+                        pkinfo.type = packet_type::cluster_next_target;
+                        write_serialized_text(*server,
+                                              pkinfo,
+                                              target);
+
+                        std::cout << "after: packet_type::cluster_next_target: "
+                                  << target
+                                  << std::endl;
+                    }
+
+                    {
+                        fs::ifstream ifs{test_target_archive};
+
+                        CRETE_EXCEPTION_ASSERT(ifs.good(),
+                                               err::file_open_failed{test_target_archive.string()});
+
+                        pkinfo.type = packet_type::cluster_tx_test_target_archive;
+
+                        server->write(pkinfo);
+
+                        write(*server,
+                              ifs,
+                              default_chunk_size);
+                    }
                 }
-                std::cout << "after: packet_type::cluster_next_target" << std::endl;
             }
             catch(std::exception& e)
             {
                 BOOST_THROW_EXCEPTION(VMException{} << err::msg{boost::diagnostic_information(e)});
             }
+
 
             // TODO: As I don't need to send the guest config for every instance (they're all the same),
             //       do I actually need this? Only for the first instance to run.
@@ -896,7 +924,8 @@ struct QemuFSM_::connect_vm
         fsm.server_,
         fsm.vm_dir_,
         fsm.dispatch_options_.mode.distributed,
-        fsm.target_});
+        fsm.target_,
+        fsm.test_target_archive_});
     }
 };
 

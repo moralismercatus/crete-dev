@@ -23,6 +23,8 @@ namespace cluster
 
 const auto vm_inst_pwd = boost::filesystem::path{"vm"};
 const auto node_image_dir = boost::filesystem::path{"image"};
+const auto node_guest_data_dir = boost::filesystem::path{"guest-data"};
+const auto node_test_target_archive_name = boost::filesystem::path{"test-target-archive.zip"};
 
 class CRETE_DLL_EXPORT VMNode : public Node
 {
@@ -48,6 +50,7 @@ public:
     auto target(const std::string& target) -> void;
     auto guest_data() -> const boost::optional<GuestData>&;
     auto reset_guest_data() -> void;
+    auto test_target_archive_path() -> boost::filesystem::path;
 
     auto poll() -> void;
 
@@ -72,6 +75,8 @@ auto receive_image(AtomicGuard<VMNode>& node,
                    Client& client) -> void;
 auto receive_target(AtomicGuard<VMNode>& node,
                     boost::asio::streambuf& sbuf) -> void;
+auto receive_test_target_archive(AtomicGuard<VMNode>& node,
+                                 Client& client) -> void;
 
 } // namespace cluster
 } // namespace crete

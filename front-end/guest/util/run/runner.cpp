@@ -38,6 +38,7 @@ namespace crete
 static const std::string log_file_name = "run.log";
 static const std::string proc_maps_file_name = "proc-maps.log";
 static const std::string harness_config_file_name = "harness.config.serialized";
+static const std::string test_target_archive_name = "test-target-archive.zip";
 
 // +--------------------------------------------------+
 // + Finite State Machine                             +
@@ -421,6 +422,53 @@ void RunnerFSM_::load_host_data(const poll&)
                              tmp);
 
         guest_config_path_ = tmp;
+
+        fs::path archive_path(test_target_archive_name);
+
+        {
+            PacketInfo pkinfo = client_->read();
+            CRETE_EXCEPTION_ASSERT(pkinfo.type == packet_type::cluster_tx_test_target_archive,
+                                   err::network_type_mismatch(pkinfo.type));
+        }
+
+        {
+            fs::ofstream ofs(archive_path);
+
+            CRETE_EXCEPTION_ASSERT(ofs.good(),
+                                   err::file_open_failed(archive_path.string()));
+
+            read(*client_,
+                 ofs);
+        }
+        {
+            bp::context ctx;
+            ctx.work_directory = fs::current_path().string();
+            ctx.environment = bp::self::get_environment();
+            ctx.stdout_behavior = bp::capture_stream();
+            ctx.stderr_behavior = bp::redirect_stream_to_stdout();
+            ctx.stdin_behavior = bp::capture_stream();
+
+            std::string exe = bp::find_executable_in_path("unzip");
+            std::vector<std::string> args;
+
+            args.push_back(exe);
+            args.push_back(archive_path.string());
+
+
+            bp::child proc = bp::launch(exe, args, ctx);
+            bp::pistream& is = proc.get_stdout();
+
+            std::string line;
+            while(getline(is, line))
+            {
+                std::cerr << line << std::endl;
+            }
+
+            bp::status status = proc.wait();
+
+            CRETE_EXCEPTION_ASSERT(status.exit_status() == 0,
+                                   err::process_exit_status(exe));
+        }
     }
     else if(guest_config_path_.empty())
     {

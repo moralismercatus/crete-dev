@@ -498,6 +498,32 @@ struct VMNodeFSM_::tx_config
     {
         transmit_config(fsm.node_,
                         ev.options_);
+
+        // TODO: spin off into worker thread.
+        // TODO: the code for image and archive is nearly identical. Abstract it.
+        if(!ev.options_.test.archive.path.empty())
+        {
+            auto archive = fs::path{ev.options_.test.archive.path};
+
+            CRETE_EXCEPTION_ASSERT(fs::exists(archive),
+                                   err::file_missing{archive.string()});
+
+            fs::ifstream ifs(archive);
+
+            CRETE_EXCEPTION_ASSERT(ifs.good(), err::file_open_failed{archive.string()});
+
+            auto pkinfo = PacketInfo{0,0,0};
+            auto lock = fsm.node_->acquire();
+
+            pkinfo.id = lock->status.id;
+            pkinfo.type = packet_type::cluster_tx_test_target_archive;
+
+            lock->server.write(pkinfo);
+
+            write(lock->server,
+                  ifs,
+                  default_chunk_size);
+        }
     }
 };
 
