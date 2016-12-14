@@ -119,7 +119,7 @@ Where &lt;memory&gt; is the amount of RAM (megabytes), &lt;img-name&gt; is the n
 Install the following dependencies on the guest OS at first:
 ```bash
 $ sudo apt-get update
-$ sudo apt-get install build-essential cmake libelf-dev -y
+$ sudo apt-get install build-essential cmake libelf-dev unzip -y
 ```
 
 Compile CRETE utilties on the guest OS:
