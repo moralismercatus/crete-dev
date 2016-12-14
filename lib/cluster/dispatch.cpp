@@ -167,8 +167,10 @@ public:
                                                                                               Not_<do_update>> >,
       Row<TxConfig          ,config            ,Commence          ,tx_config            ,Not_<is_distributed> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<ValidateImage     ,image             ,UpdateImage       ,none                 ,Not_<is_image_valid> >,
-      Row<ValidateImage     ,image             ,Commence          ,none                 ,is_image_valid       >,
+      Row<ValidateImage     ,image             ,UpdateImage       ,none                 ,And_<is_prev_task_finished,
+                                                                                              Not_<is_image_valid>> >,
+      Row<ValidateImage     ,image             ,Commence          ,none                 ,And_<is_prev_task_finished,
+                                                                                              is_image_valid> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<UpdateImage       ,image             ,Commence          ,ActionSequence_<mpl::vector<
                                                                        update_image,
@@ -333,6 +335,8 @@ struct VMNodeFSM_::ValidateImage : public msm::front::state<>
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: ValidateImage" << std::endl;}
 #endif // defined(CRETE_DEBUG)
+
+    std::unique_ptr<AsyncTask> async_task_;
 };
 
 struct VMNodeFSM_::RxGuestData : public msm::front::state<>
@@ -509,33 +513,37 @@ struct VMNodeFSM_::tx_config
 struct VMNodeFSM_::tx_test_archive
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
+    auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState& ts) -> void
     {
-        // TODO: spin off into worker thread.
         // TODO: the code for image and archive is nearly identical. Abstract it.
-        if(!ev.options_.test.archive.path.empty())
+        ts.async_task_.reset(new AsyncTask{[]( NodeRegistrar::Node node
+                                             , const fs::path archive)
         {
-            auto archive = fs::path{ev.options_.test.archive.path};
+            if(!archive.empty())
+            {
+                CRETE_EXCEPTION_ASSERT(fs::exists(archive),
+                                       err::file_missing{archive.string()});
 
-            CRETE_EXCEPTION_ASSERT(fs::exists(archive),
-                                   err::file_missing{archive.string()});
+                fs::ifstream ifs(archive);
 
-            fs::ifstream ifs(archive);
+                CRETE_EXCEPTION_ASSERT(ifs.good(),
+                                       err::file_open_failed{archive.string()});
 
-            CRETE_EXCEPTION_ASSERT(ifs.good(), err::file_open_failed{archive.string()});
+                auto pkinfo = PacketInfo{0,0,0};
+                auto lock = node->acquire();
 
-            auto pkinfo = PacketInfo{0,0,0};
-            auto lock = fsm.node_->acquire();
+                pkinfo.id = lock->status.id;
+                pkinfo.type = packet_type::cluster_tx_test_target_archive;
 
-            pkinfo.id = lock->status.id;
-            pkinfo.type = packet_type::cluster_tx_test_target_archive;
+                lock->server.write(pkinfo);
 
-            lock->server.write(pkinfo);
-
-            write(lock->server,
+                write(lock->server,
                   ifs,
                   default_chunk_size);
+            }
         }
+        , fsm.node_
+        , ev.options_.test.archive.path});
     }
 };
 
