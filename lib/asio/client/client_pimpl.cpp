@@ -4,6 +4,7 @@
 #include <boost/asio.hpp>
 #include <boost/lambda/bind.hpp>
 #include <boost/lambda/lambda.hpp>
+#include <boost/filesystem/filesystem.hpp>
 
 #include <vector>
 #include <iterator>
@@ -11,17 +12,26 @@
 
 using namespace std;
 namespace bl = boost::lambda;
+namespace fs = boost::filesystem;
 
 namespace crete
 {
 
-ClientImpl::ClientImpl(const std::string& host_ip, const std::string& port) :
-    resolver_(io_service_),
-    query_(host_ip, port),
-    endpoint_iterator_(resolver_.resolve(query_)),
-    socket_(io_service_),
-    deadline_timer_(io_service_)
+ClientImpl::ClientImpl( const std::string& host_ip
+                      , const std::string& port
+                      , const fs::path& certificate)
+    : resolver_(io_service_)
+    , query_(host_ip, port)
+    , endpoint_iterator_(resolver_.resolve(query_))
+    , ssl_context_(generate_ssl_context(certificate))
+    , socket_(io_service_, ssl_context_)
+    , deadline_timer_(io_service_)
 {
+    socket_.set_verify_mode(boost::asio::ssl::verify_peer);
+    socket_.set_verify_callback([&] (bool preverified, boost::asio::ssl::verify_context& ctx)
+    {
+        // ... TODO: verify server against cert.
+    });
 }
 
 ClientImpl::~ClientImpl()
@@ -264,6 +274,15 @@ PacketInfo ClientImpl::read(boost::posix_time::time_duration timeout)
     reset_deadline_timer();
 
     return pktinfo;
+}
+
+auto generate_ssl_client_context(const boost::filesystem::path& certificate) -> boost::asio::ssl::context
+{
+    boost::asio::ssl::context ctx(boost::asio::ssl::context::sslv23);
+
+    ctx.load_verify_file(certificate.string());
+
+    return ctx;
 }
 
 } // namespace crete

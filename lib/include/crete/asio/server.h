@@ -6,6 +6,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/ssl.hpp>
 #include <boost/filesystem/path.hpp>
 
 #include <crete/asio/common.h>
@@ -16,8 +17,8 @@ namespace crete
 class Server
 {
 public:
-    Server(Port port);
-    Server(); // Select random available port.
+    Server(Port port, const boost::filesystem::path& certificate);
+    Server(const boost::filesystem::path& certificate); // Select random available port.
     ~Server();
 
     void write_message(const std::string& msg);
@@ -53,11 +54,19 @@ protected:
     std::vector<std::string> query_directory_files(const UpdateQuery& update_query);
     void use_available_port();
 
-
 private:
     boost::asio::io_service io_service_;
     boost::asio::ip::tcp::acceptor acceptor_;
-    boost::asio::ip::tcp::socket socket_;
+//    boost::asio::ip::tcp::socket socket_;
+    // TODO: the use of OpenSSL may introduce race conditions b/c it uses global variables.
+    // Cont: Exactly to what extent the RCs exist is unknown.
+    // Cont: vm-node and dispatch are susceptible.
+    // Cont: Very serious, as random crashed will occur in the absence of proper thread locking.
+    // See: http://stackoverflow.com/questions/3919420/tutorial-on-using-openssl-with-pthreads
+    // Cont: In particular, the curl example looks most useful.
+    // See: https://www.openssl.org/docs/man1.0.2/crypto/threads.html Also
+    boost::asio::ssl::context ssl_context_;
+    boost::asio::ssl::stream<boost::asio::ip::tcp::socket> socket_;
     Port port_;
 };
 
@@ -67,6 +76,10 @@ void Server::open_connection_async(Handler handler)
     acceptor_.async_accept(socket_,
                            handler);
 }
+
+// TODO: either put everything in respective asio::client/asio::server namespaces or rename to generate_ssl_server_context() or risk multiple definition hell.
+// TODO: requires c++11 b/c context not copiable, but movable.
+boost::asio::ssl::context generate_ssl_context(const boost::filesystem::path& certificate);
 
 // Deprecated: unsafe.
 //uint16_t find_available_port();

@@ -10,20 +10,23 @@
 using boost::asio::ip::tcp;
 using namespace std;
 namespace bl = boost::lambda;
+namespace fs = boost::filesystem;
 
 namespace crete
 {
 
-Server::Server(Port port) :
+Server::Server(Port port, const fs::path& certificate) :
     acceptor_(io_service_, tcp::endpoint(tcp::v6(), port)),
-    socket_(io_service_),
+    ssl_context_(generate_ssl_context(certificate)),
+    socket_(io_service_, ssl_context_),
     port_(port)
 {
 }
 
-Server::Server() :
+Server::Server(const fs::path& certificate) :
     acceptor_(io_service_),
-    socket_(io_service_),
+    ssl_context_(generate_ssl_context(certificate)),
+    socket_(io_service_, ssl_context_),
     port_(0)
 {
     use_available_port();
@@ -33,10 +36,10 @@ Server::~Server()
 {
     try
     {
-        if(socket_.is_open()) // shutdown() throws exception on failure, so ensure it's open or std::terminate() will be called.
+        if(socket_.lowest_layer().is_open()) // shutdown() throws exception on failure, so ensure it's open or std::terminate() will be called.
         {
-            socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_send);
-            socket_.close();
+            socket_.lowest_layer().shutdown(boost::asio::ip::tcp::socket::shutdown_send);
+            socket_.lowest_layer().close();
         }
 
         io_service_.stop();
@@ -48,12 +51,14 @@ Server::~Server()
 
 void Server::open_connection_wait()
 {
-    acceptor_.accept(socket_);
+    acceptor_.accept(socket_.lowest_layer());
+
+    socket_.handshake(boost::asio::ssl::stream_base::server);
 }
 
 bool Server::is_socket_open()
 {
-    return socket_.is_open();
+    return socket_.lowest_layer().is_open();
 }
 
 void Server::write_message(const std::string& msg)
@@ -295,6 +300,29 @@ void Server::use_available_port()
     assert(port != 0);
 
     port_ = port;
+}
+
+boost::asio::ssl::context generate_ssl_context(const boost::filesystem::path& certificate)
+{
+    using boost::asio::ssl::context;
+    using boost::asio::ssl::verify_peer;
+
+    context ctx(context::sslv23);
+    ctx.set_verify_mode(verify_peer);
+    ctx.load_verify_file(certificate.string());
+    // TODO: not sure about ctx settings here. The tutorial differs. Most importantely, the DH settings.
+
+    context_.set_options(
+                boost::asio::ssl::context::default_workarounds
+                | boost::asio::ssl::context::no_sslv2
+                | boost::asio::ssl::context::single_dh_use);
+//    context_.use_certificate_chain_file(certificate.string()); Difference between this and load_verify_file?
+    context_.use_private_key_file(certificate.string(),
+                                  boost::asio::ssl::context::pem);
+    context_.use_tmp_dh_file("dh2048.pem");
+//    context_.use_tmp_dh(dh4096_param_pem.data()); TODO: hard code dh param data into dh4096_param_pem.
+
+    return ctx;
 }
 
 // Deprecated: unsafe.

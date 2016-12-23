@@ -9,8 +9,10 @@ using namespace std;
 namespace crete
 {
 
-Client::Client(const std::string& host_ip, const std::string& port) :
-    pimpl_(new ClientImpl(host_ip, port))
+Client::Client(const std::string& host_ip,
+               const std::string& port,
+               const boost::filesystem::path& certificate)
+    : pimpl_(new ClientImpl(host_ip, port, certificate))
 {
 }
 

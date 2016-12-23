@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <boost/asio.hpp>
+#include <boost/filesystem/path.hpp>
 
 #include <crete/asio/common.h>
 
@@ -16,7 +17,7 @@ class ClientImpl;
 class Client
 {
 public:
-    Client(const std::string& host_ip, const std::string& port);
+    Client(const std::string& host_ip, const std::string& port, const boost::filesystem::path& certificate);
     ~Client();
 
     void write_message(const std::string& msg);

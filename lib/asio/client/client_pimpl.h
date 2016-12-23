@@ -8,6 +8,8 @@
 #include <boost/asio/io_service.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/streambuf.hpp>
+#include <boost/asio/ssl.hpp>
+
 #include <string>
 
 #include <crete/asio/common.h>
@@ -18,7 +20,9 @@ namespace crete
 class ClientImpl
 {
 public:
-    ClientImpl(const std::string& host_ip, const std::string& port);
+    ClientImpl(const std::string& host_ip,
+               const std::string& port,
+               const boost::filesystem::path& certificate);
     ~ClientImpl();
 
     void write_message(const std::string& msg);
@@ -50,9 +54,12 @@ private:
     boost::asio::ip::tcp::resolver resolver_;
     boost::asio::ip::tcp::resolver::query query_;
     boost::asio::ip::tcp::resolver::iterator endpoint_iterator_;
+    boost::asio::ssl::context ssl_context_;
     boost::asio::ip::tcp::socket socket_;
     boost::asio::deadline_timer deadline_timer_;
 };
+
+auto generate_ssl_client_context(const boost::filesystem::path& certificate) -> boost::asio::ssl::context;
 
 } // namespace crete
 
