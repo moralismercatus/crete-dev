@@ -1280,7 +1280,7 @@ private:
     std::deque<std::string> next_target_seeds_queue_;
     std::string target_;
     boost::filesystem::path current_target_seeds_;
-    bool first_trace_rxed_{false};
+    bool do_expiration_check_{false};
     GuestData guest_data_;
 };
 
@@ -1397,7 +1397,7 @@ struct DispatchFSM_::is_target_expired
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
     {
-        if(!fsm.first_trace_rxed_) // TODO: this belongs in the FSM guard list.
+        if(!fsm.do_expiration_check_) // TODO: this belongs in the FSM guard list.
             return false;
 
         auto elapsed_time_count = fsm.elapsed_time();
@@ -1470,7 +1470,7 @@ struct DispatchFSM_::reset
         fsm.svm_node_fsms_.acquire()->clear();
 
         fsm.start_time_ = std::chrono::system_clock::now();
-        fsm.first_trace_rxed_ = false;
+        fsm.do_expiration_check_ = false;
 
         {
             auto lock = fsm.node_registrar_.acquire();
@@ -1545,12 +1545,6 @@ struct DispatchFSM_::dispatch
                 {
                     using boost::msm::back::HANDLED_TRUE;
 
-                    if(!fsm.first_trace_rxed_)
-                    {
-                        fsm.start_time_ = std::chrono::system_clock::now();
-                        fsm.first_trace_rxed_ = true;
-                    }
-
                     if(HANDLED_TRUE == nfsm->process_event(vm::trace{}))
                     {
                         fsm.to_trace_pool(nfsm->get_trace());
@@ -1598,6 +1592,12 @@ struct DispatchFSM_::dispatch
                 }
                 else if(nfsm->is_flag_active<vm::flag::guest_data_rxed>())
                 {
+                    if(!fsm.do_expiration_check_)
+                    {
+                        fsm.start_time_ = std::chrono::system_clock::now();
+                        fsm.do_expiration_check_ = true;
+                    }
+
                     fsm.guest_data_ = nfsm->guest_data();
                     fsm.guest_data_.write_guest_config(fsm.root_ / dispatch_guest_data_dir_name / dispatch_guest_config_file_name);
 
@@ -1709,7 +1709,11 @@ struct DispatchFSM_::dispatch
 
         fsm.first_ = false;
 
-        fsm.display_status(std::cout);
+        if(fsm.options_.report.status)
+        {
+            fsm.display_status(std::cout);
+        }
+
         fsm.write_statistics();
     }
 };
@@ -2050,7 +2054,7 @@ auto DispatchFSM_::display_status(std::ostream& os) -> void
     os << endl;
 
     auto disp_time = std::string("pending");
-    if(first_trace_rxed_)
+    if(do_expiration_check_)
     {
         disp_time = std::to_string(elapsed_time());
     }

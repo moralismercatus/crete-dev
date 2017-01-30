@@ -195,6 +195,13 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
         opts.svm.args.symbolic = svm.get<std::string>("args.symbolic", "");
     }
 
+    if(crete.get_child_optional("report"))
+    {
+        auto const& report = crete.get_child("report");
+
+        opts.report.status = report.get<bool>("status", true);
+    }
+
     if(crete.get_child_optional("profile"))
     {
         auto const& profile = crete.get_child("profile");

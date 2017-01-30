@@ -18,6 +18,8 @@ extern "C" {
 
 #include "custom-instructions.h"
 
+#include <sys/prctl.h>
+
 namespace fs = boost::filesystem;
 using namespace std;
 
@@ -72,6 +74,8 @@ RuntimeEnv::RuntimeEnv()
 
     m_tcg_llvm_offline_ctx.dump_cpuState_size(sizeof(CPUArchState));
     m_initial_CpuState.reserve(sizeof(CPUArchState));
+
+    prctl(PR_SET_PDEATHSIG, SIGHUP);
 }
 
 RuntimeEnv::~RuntimeEnv()

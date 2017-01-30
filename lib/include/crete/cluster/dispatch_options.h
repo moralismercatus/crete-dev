@@ -164,6 +164,19 @@ struct Trace
     }
 };
 
+struct Report
+{
+    bool status;
+
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int version)
+    {
+        (void)version;
+
+        ar & status;
+    }
+};
+
 struct Profile
 {
     uint32_t interval;
@@ -184,6 +197,7 @@ struct Dispatch
     SVM svm;
     Test test;
     Trace trace;
+    Report report;
     Profile profile;
 
     template <class Archive>

@@ -170,7 +170,8 @@ auto TestPool::insert_tc_tree(const TestCase& tc, const TestCase& input_tc) -> b
 
     // Set the parent tc_tree_node for this new
     std::string input_tc_hash = to_test_hash(input_tc);
-    assert(test_tree_.find(input_tc_hash) != test_tree_.end());
+//    assert(test_tree_.find(input_tc_hash) != test_tree_.end());
+    // TODO: in lieu of sanity check, temporary workaround
     test_tree_[input_tc_hash].m_childern_tc_indexes.push_back(test_tree_[test_hash].m_tc_index);
 
     return true;
