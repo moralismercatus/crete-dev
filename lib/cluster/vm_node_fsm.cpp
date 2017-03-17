@@ -180,7 +180,8 @@ public:
     struct read_vm_pid;
     struct update_image;
     struct start_vm;
-    struct start_test;
+    struct prepare_test;
+    struct notify_guest_next_test;
     struct store_trace;
     struct report_error;
     struct connect_vm;
@@ -196,6 +197,8 @@ public:
     struct is_first_vm;
     struct is_finished;
     struct is_distributed;
+    struct is_app_mode; // Mutually exclusive with is_ovmf_mode.
+    struct is_ovmf_mode; // Mutually exclusive with is_app_mode.
     struct has_next_target;
     struct is_vm_terminated;
 
@@ -219,14 +222,24 @@ public:
       Row<Start             ,ev::start         ,ConnectVM         ,ActionSequence_<mpl::vector<
                                                                        clean,
                                                                        init,
-                                                                       read_vm_pid>>    ,Not_<is_distributed> >,
+                                                                       read_vm_pid>>    ,And_<Not_<is_distributed>
+                                                                                             ,is_app_mode> >,
+      Row<Start             ,ev::start         ,Error             ,none/*TODO: report*/ ,And_<Not_<is_distributed>
+                                                                                             ,is_ovmf_mode> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<ValidateImage     ,ev::poll          ,UpdateImage       ,none                 ,Not_<is_image_valid> >,
-      Row<ValidateImage     ,ev::poll          ,StartVM           ,none                 ,is_image_valid  >,
+      Row<ValidateImage     ,ev::poll          ,StartVM           ,none                 ,And_<is_image_valid
+                                                                                             ,is_app_mode> >,
+      Row<ValidateImage     ,ev::poll          ,NextTest          ,none                 ,And_<is_image_valid
+                                                                                             ,is_ovmf_mode> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<UpdateImage       ,ev::poll          ,StartVM           ,update_image         ,none            >,
+      Row<UpdateImage       ,ev::poll          ,StartVM           ,update_image         ,is_app_mode       >,
+      Row<UpdateImage       ,ev::poll          ,NextTest          ,update_image         ,is_ovmf_mode      >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<StartVM           ,ev::poll          ,ConnectVM         ,start_vm             ,is_prev_task_finished>,
+      Row<StartVM           ,ev::poll          ,ConnectVM         ,start_vm             ,And_<is_prev_task_finished
+                                                                                             ,is_app_mode>>,
+      Row<StartVM           ,ev::poll          ,Testing           ,start_vm             ,And_<is_prev_task_finished
+                                                                                             ,is_ovmf_mode>>,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<ConnectVM         ,ev::poll          ,NextTest          ,connect_vm           ,And_<is_prev_task_finished,
                                                                                               And_<Not_<is_distributed>,
@@ -247,9 +260,22 @@ public:
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<GuestDataRxed     ,ev::poll          ,NextTest          ,none                 ,none                 >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<NextTest          ,ev::next_test     ,Testing           ,start_test           ,is_prev_task_finished>,
+      Row<NextTest          ,ev::next_test     ,Testing           ,ActionSequence_<mpl::vector<
+                                                                       prepare_test,
+                                                                       notify_guest_next_test>>
+                                                                                        ,And_<is_prev_task_finished
+                                                                                             ,is_app_mode> >,
+      Row<NextTest          ,ev::next_test     ,StartVM           ,prepare_test         ,And_<is_prev_task_finished
+                                                                                             ,is_ovmf_mode> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<Testing           ,ev::poll          ,StoreTrace        ,store_trace          ,is_finished     >,
+      Row<Testing           ,ev::poll          ,StoreTrace        ,store_trace          ,And_<is_prev_task_finished
+                                                                                             ,And_<is_finished
+                                                                                                  ,is_app_mode>> >,
+      Row<Testing           ,ev::poll          ,StoreTrace        ,ActionSequence_<mpl::vector<
+                                                                       store_trace,
+                                                                       terminate>>      ,And_<is_prev_task_finished
+                                                                                             ,And_<is_finished
+                                                                                                  ,is_ovmf_mode>> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<StoreTrace        ,ev::poll          ,Finished          ,none                 ,is_prev_task_finished>,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -427,6 +453,8 @@ struct QemuFSM_::ValidateImage : public msm::front::state<>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: ValidateImage" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: ValidateImage" << std::endl;}
+
+    std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::UpdateImage : public msm::front::state<>
 {
@@ -434,6 +462,8 @@ struct QemuFSM_::UpdateImage : public msm::front::state<>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: UpdateImage" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: UpdateImage" << std::endl;}
+
+    std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::StartVM : public msm::front::state<>
 {
@@ -479,6 +509,8 @@ struct QemuFSM_::Testing : public msm::front::state<>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Testing" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Testing" << std::endl;}
+
+    std::unique_ptr<AsyncTask> async_task_;
 };
 struct QemuFSM_::StoreTrace : public msm::front::state<>
 {
@@ -696,9 +728,16 @@ struct QemuFSM_::start_vm
             auto args = std::vector<std::string>{fs::absolute(exe).string() // It appears our modified QEMU requires full path in argv[0]...
                                 ,"-hda"
                                 ,image_name
-                                ,"-loadvm"
-                                ,dispatch_options.vm.snapshot
                                 };
+
+            if(dispatch_options.vm.mode == cluster::option::VM::Mode::app)
+            {
+                CRETE_EXCEPTION_ASSERT(!dispatch_options.vm.snapshot.empty()
+                                      ,err::arg_missing{"dispatch.vm.snapshot"});
+
+                args.insert(args.end()
+                           ,{"-loadvm", dispatch_options.vm.snapshot});
+            }
 
             auto add_args = std::vector<std::string>{};
 
@@ -732,45 +771,60 @@ struct QemuFSM_::start_vm
     }
 };
 
-struct QemuFSM_::start_test
+struct QemuFSM_::prepare_test
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
+    auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState& ts) -> void
     {
-        auto hostfile = fsm.vm_dir_ / hostfile_dir_name;
-
-        if(!fs::exists(hostfile))
+        ts.async_task_.reset(new AsyncTask{[](const fs::path vm_dir
+                                             ,const TestCase tc)
         {
-            fs::create_directories(hostfile);
-        }
+            auto hostfile = vm_dir / hostfile_dir_name;
 
-        auto in_args_path = hostfile / input_args_name;
+            if(!fs::exists(hostfile))
+            {
+                fs::create_directories(hostfile);
+            }
 
-        if(fs::exists(in_args_path))
-        {
-            fs::remove(in_args_path);
-        }
+            auto in_args_path = hostfile / input_args_name;
 
-        std::ofstream ofs{in_args_path.string().c_str()};
+            if(fs::exists(in_args_path))
+            {
+                fs::remove(in_args_path);
+            }
 
-        if(!ofs.good())
-        {
-            BOOST_THROW_EXCEPTION(Exception{} << err::file{in_args_path.string()});
-        }
+            std::ofstream ofs{in_args_path.string().c_str()};
 
-        write_serialized(ofs, ev.tc_);
+            if(!ofs.good())
+            {
+                BOOST_THROW_EXCEPTION(Exception{} << err::file{in_args_path.string()});
+            }
 
-        try
-        {
-            fsm.server_->write(0,
-                               packet_type::cluster_next_test);
-        }
-        catch(std::exception& e)
-        {
-            BOOST_THROW_EXCEPTION(VMException{} << err::msg{boost::diagnostic_information(e)});
-        }
+            write_serialized(ofs, tc);
+        }, fsm.vm_dir_, ev.tc_});
     }
 };
+
+struct QemuFSM_::notify_guest_next_test
+{
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState& ts) -> void
+    {
+        ts.async_task_.reset(new AsyncTask{[](std::shared_ptr<Server> server)
+        {
+            try
+            {
+                server->write(0,
+                              packet_type::cluster_next_test);
+            }
+            catch(std::exception& e)
+            {
+                BOOST_THROW_EXCEPTION(VMException{} << err::msg{boost::diagnostic_information(e)});
+            }
+        }, fsm.server_});
+    }
+};
+
 
 struct QemuFSM_::store_trace
 {
@@ -999,7 +1053,7 @@ struct QemuFSM_::is_prev_task_finished
 struct QemuFSM_::is_first_vm
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         return fsm.first_vm_;
     }
@@ -1008,7 +1062,7 @@ struct QemuFSM_::is_first_vm
 struct QemuFSM_::is_vm_terminated
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         return !process::is_running(*fsm.pid_);
     }
@@ -1035,24 +1089,54 @@ struct QemuFSM_::is_finished
 struct QemuFSM_::is_distributed
 {
     template <class FSM,class SourceState,class TargetState>
-    auto operator()(ev::start const& ev, FSM&, SourceState&, TargetState&) -> bool
+    auto operator()(ev::start const& ev, FSM&, SourceState&, TargetState&) const -> bool
     {
         std::cerr << "ev.dispatch_options_.mode.distributed" << std::endl;
         return ev.dispatch_options_.mode.distributed;
     }
 
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         std::cerr << "fsm.dispatch_options_.mode.distributed" << std::endl;
         return fsm.dispatch_options_.mode.distributed;
     }
 };
 
+struct QemuFSM_::is_app_mode
+{
+    template <class FSM,class SourceState,class TargetState>
+    auto operator()(ev::start const& ev, FSM&, SourceState&, TargetState&) const -> bool
+    {
+        return ev.dispatch_options_.vm.mode == cluster::option::VM::Mode::app;
+    }
+
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
+    {
+        return fsm.dispatch_options_.vm.mode == cluster::option::VM::Mode::app;
+    }
+};
+
+struct QemuFSM_::is_ovmf_mode
+{
+    template <class FSM,class SourceState,class TargetState>
+    auto operator()(ev::start const& ev, FSM&, SourceState&, TargetState&) const -> bool
+    {
+        return ev.dispatch_options_.vm.mode == cluster::option::VM::Mode::ovmf;
+    }
+
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
+    {
+        return fsm.dispatch_options_.vm.mode == cluster::option::VM::Mode::ovmf;
+    }
+};
+
 struct QemuFSM_::has_next_target
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         return !fsm.target_.empty();
     }
@@ -1062,7 +1146,7 @@ struct QemuFSM_::has_next_target
 struct QemuFSM_::is_image_valid
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         auto path = fsm.vm_dir_ / image_info_name;
         auto new_image_info_path = fsm.new_image_path_.parent_path() / image_info_name;

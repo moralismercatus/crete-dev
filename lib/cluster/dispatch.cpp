@@ -159,6 +159,8 @@ public:
     struct do_update;
     struct is_first_vm_node;
     struct is_image_valid;
+    struct is_app_mode; // Mutually exclusive with is_ovmf_mode. TODO: abstract redundant with QemuFSM_::is_app_mode.
+    struct is_ovmf_mode; // Mutually exclusive with is_app_mode. TODO: abstract redundant with QemuFSM_::is_ovmf_mode.
     struct has_trace;
     struct has_error;
 
@@ -196,14 +198,16 @@ public:
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<UpdateImage       ,image             ,Commence          ,ActionSequence_<mpl::vector<
                                                                        update_image,
-                                                                       update_image_info>> ,none              >,
+                                                                       update_image_info>>
+                                                                                        ,none              >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<Commence          ,poll              ,RxGuestData       ,commence             ,And_<is_prev_task_finished,
-                                                                                            is_first_vm_node> >,
-      Row<Commence          ,poll              ,RxStatus          ,commence             ,And_<is_prev_task_finished,
-                                                                                          Not_<is_first_vm_node>> >,
+      Row<Commence          ,poll              ,RxGuestData       ,commence             ,And_<is_prev_task_finished
+                                                                                             ,is_first_vm_node> >,
+      Row<Commence          ,poll              ,RxStatus          ,commence             ,And_<is_prev_task_finished
+                                                                                             ,Not_<is_first_vm_node>> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-      Row<RxGuestData       ,poll              ,GuestDataRxed     ,rx_guest_data        ,none                 >,
+      Row<RxGuestData       ,poll              ,GuestDataRxed     ,rx_guest_data        ,is_app_mode          >,
+      Row<RxGuestData       ,poll              ,GuestDataRxed     ,none                 ,is_ovmf_mode          >,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<GuestDataRxed     ,poll              ,RxStatus          ,none                 ,none                 >,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -234,8 +238,7 @@ private:
     std::shared_ptr<GuestDataPostExec> guest_data_post_exec_ = std::make_shared<GuestDataPostExec>();
     std::deque<log::NodeError> errors_;
     boost::optional<ImageInfo> image_info_;
-    bool update_image_{false};
-    bool distributed_{false};
+    cluster::option::Dispatch dispatch_options_; // TODO: should be const, but how to make using FSM's "ctor" idiom?
     GuestData guest_data_;
 };
 
@@ -244,21 +247,18 @@ struct start
     start(const NodeRegistrar::Node& node,
           bool first,
           const fs::path& traces_dir,
-          bool update_image,
-          bool distributed) :
+          const option::Dispatch& options) :
         node_{node},
         first_vm_node_{first},
         traces_dir_{traces_dir},
-        update_image_{update_image},
-        distributed_{distributed}
+        dispatch_options_(options)
     {
     }
 
     NodeRegistrar::Node node_;
     bool first_vm_node_{false};
     fs::path traces_dir_;
-    bool update_image_{false};
-    bool distributed_{false};
+    const option::Dispatch dispatch_options_;
 };
 
 struct config
@@ -335,9 +335,9 @@ struct VMNodeFSM_::Start : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: Start" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: Start [" << typeid(*this).name() << "] " << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Start" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Start [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -359,9 +359,9 @@ struct VMNodeFSM_::ValidateImage : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: ValidateImage" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: ValidateImage [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: ValidateImage" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: ValidateImage [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -371,9 +371,9 @@ struct VMNodeFSM_::RxGuestData : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: RxGuestData" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: RxGuestData [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: RxGuestData" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: RxGuestData [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -383,9 +383,9 @@ struct VMNodeFSM_::GuestDataRxed : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: GuestDataRxed" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: GuestDataRxed [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: GuestDataRxed" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: GuestDataRxed [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -395,9 +395,9 @@ struct VMNodeFSM_::UpdateImage : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: UpdateImage" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: UpdateImage [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: UpdateImage" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: UpdateImage [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -407,9 +407,9 @@ struct VMNodeFSM_::Commence : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: Commence" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: Commence [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Commence" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Commence [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
@@ -441,9 +441,9 @@ struct VMNodeFSM_::RxTrace : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: RxTrace" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: RxTrace [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: RxTrace" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: RxTrace [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -453,9 +453,9 @@ struct VMNodeFSM_::TxTest : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: TxTest" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: TxTest [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: TxTest" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: TxTest [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -465,9 +465,9 @@ struct VMNodeFSM_::TraceRxed : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: TraceRxed" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: TraceRxed [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: TraceRxed" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: TraceRxed [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
@@ -479,9 +479,9 @@ struct VMNodeFSM_::TestTxed : public msm::front::state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const& ,FSM&) {std::cout << "entering: TestTxed" << std::endl;}
+    void on_entry(Event const& ,FSM&) {std::cout << "entering: TestTxed [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: TestTxed" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: TestTxed [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -520,8 +520,7 @@ struct VMNodeFSM_::init
     {
         fsm.node_ = ev.node_;
         fsm.first_vm_node_ = ev.first_vm_node_;
-        fsm.update_image_ = ev.update_image_;
-        fsm.distributed_ = ev.distributed_;
+        fsm.dispatch_options_ = ev.dispatch_options_;
         fsm.traces_dir_ = ev.traces_dir_;
     }
 };
@@ -703,25 +702,25 @@ struct VMNodeFSM_::is_prev_task_finished // TODO: this struct should be a genera
 struct VMNodeFSM_::is_distributed
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
-        return fsm.distributed_;
+        return fsm.dispatch_options_.mode.distributed;
     }
 };
 
 struct VMNodeFSM_::do_update
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
-        return fsm.update_image_;
+        return fsm.dispatch_options_.vm.image.update;
     }
 };
 
 struct VMNodeFSM_::is_first_vm_node
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&,TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&,TargetState&) const -> bool
     {
         return fsm.first_vm_node_;
     }
@@ -752,6 +751,24 @@ struct VMNodeFSM_::is_image_valid
         }
 
         return true;
+    }
+};
+
+struct VMNodeFSM_::is_app_mode
+{
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
+    {
+        return fsm.dispatch_options_.vm.mode == cluster::option::VM::Mode::app;
+    }
+};
+
+struct VMNodeFSM_::is_ovmf_mode
+{
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
+    {
+        return fsm.dispatch_options_.vm.mode == cluster::option::VM::Mode::ovmf;
     }
 };
 
@@ -1244,7 +1261,8 @@ public:
       Row<Start             ,start             ,SpecCheck         ,init                 ,none                 >,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<SpecCheck         ,poll              ,NextTarget        ,none                 ,And_<Not_<is_dev_mode>,
-                                                                                              Or_<is_first,
+                                                                                              Or_<And_<is_first,
+                                                                                                       have_next_target>,
                                                                                                   And_<is_target_expired,
                                                                                                        have_next_target>>>>,
       Row<SpecCheck         ,poll              ,Dispatch          ,none                 ,Or_<is_dev_mode,
@@ -1313,9 +1331,9 @@ struct DispatchFSM_::Start : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const&,FSM&) {std::cout << "entering: Start" << std::endl;}
+    void on_entry(Event const&,FSM&) {std::cout << "entering: Start [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Start" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Start [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -1323,9 +1341,9 @@ struct DispatchFSM_::SpecCheck : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const&,FSM&) {std::cout << "entering: SpecCheck" << std::endl;}
+    void on_entry(Event const&,FSM&) {std::cout << "entering: SpecCheck [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: SpecCheck" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: SpecCheck [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -1333,9 +1351,9 @@ struct DispatchFSM_::NextTarget : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const&,FSM&) {std::cout << "entering: NextTarget" << std::endl;}
+    void on_entry(Event const&,FSM&) {std::cout << "entering: NextTarget [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: NextTarget" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: NextTarget [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -1343,9 +1361,9 @@ struct DispatchFSM_::Dispatch : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const&,FSM&) {std::cout << "entering: Dispatch" << std::endl;}
+    void on_entry(Event const&,FSM&) {std::cout << "entering: Dispatch [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Dispatch" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Dispatch [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -1353,9 +1371,9 @@ struct DispatchFSM_::Terminate : public msm::front::state<>
 {
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const&,FSM&) {std::cout << "entering: Terminate" << std::endl;}
+    void on_entry(Event const&,FSM&) {std::cout << "entering: Terminate [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Terminate" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Terminate [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -1365,9 +1383,9 @@ struct DispatchFSM_::Terminated : public msm::front::terminate_state<>
 
 #if defined(CRETE_DEBUG)
     template <class Event,class FSM>
-    void on_entry(Event const&,FSM&) {std::cout << "entering: Terminated" << std::endl;}
+    void on_entry(Event const&,FSM&) {std::cout << "entering: Terminated [" << typeid(*this).name() << "]" << std::endl;}
     template <class Event,class FSM>
-    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Terminated" << std::endl;}
+    void on_exit(Event const&,FSM& ) {std::cout << "leaving: Terminated [" << typeid(*this).name() << "]" << std::endl;}
 #endif // defined(CRETE_DEBUG)
 };
 
@@ -1378,7 +1396,7 @@ struct DispatchFSM_::Terminated : public msm::front::terminate_state<>
 struct DispatchFSM_::is_first
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         return fsm.first_;
     }
@@ -1387,7 +1405,7 @@ struct DispatchFSM_::is_first
 struct DispatchFSM_::is_dev_mode
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         return !fsm.options_.mode.distributed;
     }
@@ -1396,7 +1414,7 @@ struct DispatchFSM_::is_dev_mode
 struct DispatchFSM_::have_next_target
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         return !fsm.next_target_queue_.empty();
     }
@@ -1405,7 +1423,7 @@ struct DispatchFSM_::have_next_target
 struct DispatchFSM_::is_target_expired
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) const -> bool
     {
         auto elapsed_time_count = fsm.elapsed_time();
         auto no_new_tb_time_count = fsm.no_new_tb_time();
@@ -1616,6 +1634,7 @@ struct DispatchFSM_::dispatch
                     {
                         if(fsm.options_.vm.initial_tc.get_elements().size() > 0)
                         {
+                            std::cerr << "fsm.options_.vm.initial_tc.get_elements().size() > 0" << std::endl;
                             fsm.test_pool_.insert(fsm.options_.vm.initial_tc);
                         }
                         else
@@ -2489,8 +2508,7 @@ auto register_node_fsm(NodeRegistrar::Node& node,
         fsm->process_event(vm::start{node,
                                      first_vm_node,
                                      root / dispatch_trace_dir_name,
-                                     options.vm.image.update,
-                                     options.mode.distributed});
+                                     options});
         vm_node_fsms.acquire()->emplace_back(fsm);
         break;
     }

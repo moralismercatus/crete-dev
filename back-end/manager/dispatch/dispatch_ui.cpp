@@ -159,6 +159,24 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
 
         opts.vm.arch = vm.get<std::string>("arch");
 
+        opts.vm.mode = [&vm]
+        {
+            auto mode = vm.get<std::string>("mode", "app");
+
+            if("app" == mode)
+                return option::VM::Mode::app;
+            else if("ovmf" == mode)
+                return option::VM::Mode::ovmf;
+            else
+                assert(0);
+        }();
+
+        if(opts.vm.mode == option::VM::Mode::ovmf)
+        {
+            // Dispatch FSM requires a test. In OVMF mode, the concept doesn't apply, so supply a phony one.
+            opts.test.items.emplace_back("ovmf-test");
+        }
+
         opts.vm.initial_tc = [&vm]
         {
             auto p = fs::path{vm.get<std::string>("initial-tc", "")};
@@ -183,8 +201,12 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
             opts.vm.image.path = vm.get<std::string>("image.path");
             opts.vm.image.update = vm.get<bool>("image.update", true);
             opts.vm.arch = vm.get<std::string>("arch");
-            opts.vm.snapshot = vm.get<std::string>("snapshot");
             opts.vm.args = vm.get<std::string>("args", "");
+
+            if(opts.vm.mode == option::VM::Mode::app)
+            {
+                opts.vm.snapshot = vm.get<std::string>("snapshot");
+            }
         }
     }
 
@@ -213,6 +235,12 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
     {
         BOOST_THROW_EXCEPTION(Exception{} << err::msg{"duplicate items found: " + std::string{*pos}}
                                           << err::parse{"crete.test.items"});
+    }
+
+    if(opts.mode.distributed)
+    {
+        CRETE_EXCEPTION_ASSERT( !opts.test.items.empty()
+                              , err::parse{"crete.test.items is missing elements"});
     }
 
     return opts;

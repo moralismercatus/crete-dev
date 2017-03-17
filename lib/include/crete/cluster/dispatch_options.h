@@ -84,8 +84,15 @@ struct Image
 
 struct VM
 {
+    enum class Mode : uint32_t
+    {
+        app,
+        ovmf
+    };
+
     Image image;
     std::string arch;
+    Mode mode{Mode::app};
     std::string snapshot;
     std::string args;
     TestCase initial_tc;
@@ -97,6 +104,7 @@ struct VM
 
         ar & image;
         ar & arch;
+        ar & mode;
         ar & snapshot;
         ar & args;
         ar & initial_tc;
