@@ -16,11 +16,29 @@ namespace crete
 namespace cluster
 {
 
-TestPool::TestPool(const fs::path& root)
-    : random_engine_{static_cast<unsigned>(std::time(0))}
-    , root_{root}
+bool TestPriority::operator() (const TestCase& lhs, const TestCase& rhs) const
 {
+  if (m_tc_sched_strat == FIFO)
+  {
+      return false;
+  } else if (m_tc_sched_strat == BFS) {
+      if(lhs.get_traceTag_explored_nodes().size()
+              > rhs.get_traceTag_explored_nodes().size())
+      {
+          return true;
+      } else {
+          return false;
+      }
+  } else  {
+      fprintf(stderr, "[CRETE ERROR] un-recognized test priority: \'%d\'\n", m_tc_sched_strat);
+      assert(0);
+      return false;
+  }
 }
+
+TestPool::TestPool(const fs::path& root)
+    : root_{root}
+    ,next_(TestPriority(BFS)) {}
 
 auto TestPool::next() -> boost::optional<TestCase>
 {
@@ -29,31 +47,29 @@ auto TestPool::next() -> boost::optional<TestCase>
         return boost::optional<TestCase>{};
     }
 
-    // FIFO:
-    auto tc = next_.back();
-    next_.pop_back();
+    auto tc = next_.top();
+    next_.pop();
 
     return boost::optional<TestCase>{tc};
+}
 
-    // Random:
-//    std::uniform_int_distribution<size_t> dist{0,
-//                                               next_.size() - 1};
+// The initial test case extracted from config will only be used to start the test,
+// as it is open to change, such as invocation of "crete_make_concolic()" within
+// the target exec under test
+auto TestPool::insert_initial_tc_from_config(const TestCase& tc) -> bool
+{
+    assert(test_tree_.empty());
+    assert(next_.empty());
 
-//    auto it = next_.begin();
-//    std::advance(it,
-//                 dist(random_engine_));
-//    auto tc = boost::optional<TestCase>{*it};
-
-//    next_.erase(it);
-
-//    return tc;
+    next_.push(tc);
+    return true;
 }
 
 auto TestPool::insert(const TestCase& tc) -> bool
 {
     if(insert_tc_tree(tc))
     {
-        next_.push_front(tc);
+        next_.push(tc);
         return true;
     }
 
@@ -64,7 +80,7 @@ auto TestPool::insert(const TestCase& tc, const TestCase& input_tc) -> bool
 {
     if(insert_tc_tree(tc, input_tc))
     {
-        next_.push_front(tc);
+        next_.push(tc);
         return true;
     }
 
@@ -81,6 +97,11 @@ auto TestPool::insert(const std::vector<TestCase>& tcs) -> void
 
 auto TestPool::insert(const std::vector<TestCase>& new_tcs, const TestCase& input_tc) -> void
 {
+    if(test_tree_.empty())
+    {
+        insert_tc_tree(input_tc);
+    }
+
     for(const auto& tc : new_tcs)
     {
         insert(tc, input_tc);
@@ -89,7 +110,7 @@ auto TestPool::insert(const std::vector<TestCase>& new_tcs, const TestCase& inpu
 
 auto TestPool::clear() -> void
 {
-    next_.clear();
+    next_ = TestQueue(TestPriority(BFS));
     test_tree_.clear();
 }
 

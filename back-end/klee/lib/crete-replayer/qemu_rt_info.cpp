@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <iomanip>
 
+#include <boost/unordered_set.hpp>
 #include <boost/archive/binary_iarchive.hpp>
 #include <sstream>
 
@@ -20,7 +21,6 @@ QemuRuntimeInfo::QemuRuntimeInfo()
     m_streamed_index = 0;
 
     // to-be-streamed
-    init_memoSyncTables();
     init_interruptStates();
 
     // not-streamed
@@ -80,11 +80,16 @@ void QemuRuntimeInfo::sync_cpuState(klee::ObjectState *wos, uint64_t tb_index) {
 
 const memoSyncTable_ty& QemuRuntimeInfo::get_memoSyncTable(uint64_t tb_index)
 {
-//    if(tb_index >= (m_streamed_tb_count + m_memoSyncTables.size()))
-//        read_streamed_trace();
+    if(tb_index >= m_streamed_tb_count)
+    {
+        read_streamed_trace();
+        assert((m_streamed_tb_count - tb_index) == m_memoSyncTables.size());
+    }
 
-    assert(tb_index < m_memoSyncTables.size());
-	return m_memoSyncTables[tb_index];
+    uint64_t adjusted_tb_index = tb_index - (m_streamed_tb_count - m_memoSyncTables.size());
+    assert(adjusted_tb_index < m_memoSyncTables.size());
+
+    return m_memoSyncTables[adjusted_tb_index];
 }
 
 void QemuRuntimeInfo::printMemoSyncTable(uint64_t tb_index)
@@ -149,12 +154,12 @@ void QemuRuntimeInfo::init_concolics()
 
     ifstream inputs("concrete_inputs.bin", ios_base::in | ios_base::binary);
     assert(inputs && "failed to open concrete_inputs file!");
-    TestCase tc = read_test_case(inputs);
+    const TestCase tc = read_serialized(inputs);
 
     // Get the concrete value of conoclic variables and put them in a map indexed by name
     vector<TestCaseElement> tc_elements = tc.get_elements();
     map<string, cv_concrete_ty> map_concrete_value;
-    for(vector<TestCaseElement>::iterator it = tc_elements.begin();
+    for(vector<TestCaseElement>::const_iterator it = tc_elements.begin();
     		it != tc_elements.end(); ++it) {
     	string c_name(it->name.begin(), it->name.end());
     	cv_concrete_ty pair_concrete_value(it->data_size,
@@ -201,6 +206,19 @@ void QemuRuntimeInfo::init_concolics()
         m_concolics.push_back(cv);
     }
 
+    m_trace_tag_explored = tc.get_traceTag_explored_nodes();
+    m_trace_tag_semi_explored = tc.get_traceTag_semi_explored_node();
+    m_trace_tag_new = tc.get_traceTag_new_nodes();
+
+    CRETE_DBG_TT(
+    fprintf(stderr, "init_concolics():\n");
+    fprintf(stderr, "m_trace_tag_explored:\n");
+    crete::debug::print_trace_tag(m_trace_tag_explored);
+    fprintf(stderr, "m_trace_tag_semi_explored:\n");
+    crete::debug::print_trace_tag(m_trace_tag_semi_explored);
+    fprintf(stderr, "m_trace_tag_new:\n");
+    crete::debug::print_trace_tag(m_trace_tag_new);
+    );
 }
 
 void QemuRuntimeInfo::cleanup_concolics()
@@ -210,17 +228,6 @@ void QemuRuntimeInfo::cleanup_concolics()
 		m_concolics.pop_back();
 		delete ptr_cv;
 	}
-}
-
-void QemuRuntimeInfo::init_memoSyncTables()
-{
-    ifstream i_sm("dump_new_sync_memos.bin", ios_base::binary);
-    assert(i_sm && "open file failed: dump_new_sync_memos.bin\n");
-
-    boost::archive::binary_iarchive ia(i_sm);
-    ia >> m_memoSyncTables;
-
-    CRETE_DBG(print_memoSyncTables(););
 }
 
 void QemuRuntimeInfo::print_memoSyncTables()
@@ -293,8 +300,10 @@ void QemuRuntimeInfo::read_streamed_trace()
 {
     uint32_t read_amt_cst = read_cpuSyncTables();
     uint32_t read_amt_dbg_cst = read_debug_cpuSyncTables();
+    uint32_t read_amt_mst = read_memoSyncTables();
 
     assert(read_amt_cst == read_amt_dbg_cst);
+    assert(read_amt_cst == read_amt_mst);
 
     m_streamed_tb_count += read_amt_cst;
     ++m_streamed_index;
@@ -339,6 +348,23 @@ uint32_t QemuRuntimeInfo::read_debug_cpuSyncTables()
     return m_debug_cpuStateSyncTables.size();
 }
 
+uint32_t QemuRuntimeInfo::read_memoSyncTables()
+{
+    stringstream ss;
+    ss << "dump_new_sync_memos." << m_streamed_index << ".bin";
+    ifstream i_sm(ss.str().c_str(), ios_base::binary);
+    if(!i_sm.good()) {
+        cerr << "[Crete Error] can't find file " << ss.str() << endl;
+        assert(0);
+    }
+
+    boost::archive::binary_iarchive ia(i_sm);
+    m_memoSyncTables.clear();
+    ia >> m_memoSyncTables;
+
+    return m_memoSyncTables.size();
+}
+
 void QemuRuntimeInfo::read_debug_cpuState_offsets()
 {
     ifstream i_sm("dump_debug_cpuState_offsets.bin", ios_base::binary);
@@ -361,13 +387,6 @@ QemuInterruptInfo QemuRuntimeInfo::get_qemuInterruptInfo(uint64_t tb_index)
 void QemuRuntimeInfo::update_qemu_CPUState(klee::ObjectState *wos, uint64_t tb_index)
 {
 	assert(0);
-}
-
-void QemuRuntimeInfo::verify_init() const
-{
-    assert(m_cpuStateSyncTables.size() == m_memoSyncTables.size());
-
-    CRETE_CK(assert(m_cpuStateSyncTables.size() == m_debug_cpuStateSyncTables.size()););
 }
 
 static void concretize_incorrect_cpu_element(klee::ObjectState *cpu_os,
@@ -406,8 +425,8 @@ void QemuRuntimeInfo::cross_check_cpuState(klee::ExecutionState &state,
     for(vector<CPUStateElement>::const_iterator it = correct_cpuStates.begin();
             it != correct_cpuStates.end(); ++it) {
 
-//        if(it->m_name.find("cc_src") != string::npos)
-//            continue;
+        if(it->m_name.find("debug_cc_src") != string::npos)
+            continue;
 
         vector<uint8_t> current_value;
         for(uint64_t i = 0; i < it->m_size; ++i) {
@@ -497,6 +516,65 @@ void QemuRuntimeInfo::verify_CpuSate_offset(string name, uint64_t offset, uint64
     }
 }
 
+void QemuRuntimeInfo::check_trace_tag(uint64_t tt_tag_index, uint64_t tb_index,
+        vector<bool>& current_node_br_taken, vector<bool>& current_node_br_taken_semi_explored,
+        bool &explored_node) const
+{
+    assert(tt_tag_index < (m_trace_tag_explored.size() + m_trace_tag_new.size()));
+
+    const crete::CreteTraceTagNode *current_tt_node;
+
+    if(tt_tag_index < m_trace_tag_explored.size()) {
+        explored_node = true;
+        current_tt_node = &m_trace_tag_explored[tt_tag_index];
+
+        if(tt_tag_index == (m_trace_tag_explored.size() - 1) && !m_trace_tag_semi_explored.empty())
+        {
+            assert(m_trace_tag_semi_explored.size() == 1);
+            current_node_br_taken_semi_explored = m_trace_tag_semi_explored.front().m_br_taken;
+        }
+    } else {
+        explored_node = false;
+        current_tt_node = &m_trace_tag_new[tt_tag_index - m_trace_tag_explored.size()];
+    }
+
+    // Assumption: conditional br instruction in KLEE and the branches in trace-tag should be matched one by one
+    if(current_tt_node->m_tb_count != tb_index)
+    {
+        fprintf(stderr, "current_tt_node->m_tb_count = %lu, tb_index = %lu\n",
+                current_tt_node->m_tb_count, tb_index);
+        assert(0 && "[Trace Tag] Assumption broken\n");
+    }
+
+    current_node_br_taken = current_tt_node->m_br_taken;
+}
+
+// vector::insert(begin, end) would insert [begin, end)
+void QemuRuntimeInfo::get_trace_tag_for_tc(uint64_t tt_tag_index,
+        crete::creteTraceTag_ty &tt_tag_for_tc,
+        vector<bool>& current_node_br_taken_semi_explored) const
+{
+    assert(tt_tag_index < (m_trace_tag_explored.size() + m_trace_tag_new.size()));
+
+    if(tt_tag_index < m_trace_tag_explored.size())
+    {
+        tt_tag_for_tc.insert(tt_tag_for_tc.end(), m_trace_tag_explored.begin(),
+                m_trace_tag_explored.begin() + tt_tag_index + 1);
+
+        if(tt_tag_index == (m_trace_tag_explored.size() - 1) && !m_trace_tag_semi_explored.empty())
+        {
+            assert(m_trace_tag_semi_explored.size() == 1);
+            current_node_br_taken_semi_explored = m_trace_tag_semi_explored.front().m_br_taken;
+        }
+    } else
+    {
+        tt_tag_for_tc.insert(tt_tag_for_tc.end(), m_trace_tag_explored.begin(), m_trace_tag_explored.end());
+        tt_tag_for_tc.insert(tt_tag_for_tc.end(), m_trace_tag_new.begin(),
+                m_trace_tag_new.begin() + (tt_tag_index - m_trace_tag_explored.size()) + 1);
+    }
+}
+
+
 /*****************************/
 /* Functions for klee */
 QemuRuntimeInfo* qemu_rt_info_initialize()
@@ -511,4 +589,25 @@ void qemu_rt_info_cleanup(QemuRuntimeInfo *qrt)
 
 void boost::throw_exception(std::exception const & e){
     ;
+}
+
+static boost::unordered_set<uint64_t> init_fork_blacklist() {
+    boost::unordered_set<uint64_t> list;
+
+    // xxx: hack to disable fork from certain tb
+//    list.insert(0xc1199bd0);
+
+    return list;
+}
+
+static boost::unordered_set<uint64_t> fork_blacklist = init_fork_blacklist();
+
+bool is_in_fork_blacklist(uint64_t tb_pc)
+{
+    if (fork_blacklist.find(tb_pc) == fork_blacklist.end())
+    {
+        return false;
+    } else {
+        return true;
+    }
 }

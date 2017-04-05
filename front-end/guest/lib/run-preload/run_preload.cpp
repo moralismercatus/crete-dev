@@ -1,4 +1,4 @@
-#include <crete/harness.h>
+#include <crete/common.h>
 #include <crete/custom_instr.h>
 #include <crete/harness_config.h>
 
@@ -24,19 +24,16 @@ using namespace std;
 using namespace crete;
 namespace fs = boost::filesystem;
 
-const char* const crete_config_file = "harness.config.serialized";
-const std::string crete_proc_maps_file = "proc-maps.log";
-
 void print_back_trace();
 
 config::HarnessConfiguration crete_load_configuration()
 {
-    std::ifstream ifs(crete_config_file,
+    std::ifstream ifs(CRETE_CONFIG_SERIALIZED_PATH,
                       ios_base::in | ios_base::binary);
 
     if(!ifs.good())
     {
-        throw std::runtime_error("failed to open file: " + std::string(crete_config_file));
+        throw std::runtime_error("failed to open file: " + std::string(CRETE_CONFIG_SERIALIZED_PATH));
     }
 
     boost::archive::text_iarchive ia(ifs);
@@ -68,7 +65,7 @@ static void crete_process_stdin_libc(const config::STDStream stdin_config)
     //2. Write concolic/concrete value from buffer "crete_stdin_buffer" to file "crete_stdin_ramdisk"
     char stdin_ramdisk_file[512];
     memset(stdin_ramdisk_file, 0, 512);
-    sprintf(stdin_ramdisk_file, "%s/crete_stdin_ramdisk", getenv("CRETE_RAMDISK_PATH"));
+    sprintf(stdin_ramdisk_file, "%s/crete_stdin_ramdisk", CRETE_RAMDISK_PATH);
 
     //TODO: xxx shall I open it with flag "b" (binary)?
     FILE *crete_stdin_fd = fopen (stdin_ramdisk_file, "wb");
@@ -232,12 +229,38 @@ void crete_process_configuration(const config::HarnessConfiguration& hconfig,
     crete_process_stdin(hconfig);
 }
 
+static void update_proc_maps()
+{
+    namespace fs = boost::filesystem;
+
+    // FIXME: xxx terrible way to identify the prime execution
+    bool terminate = false;
+    if(!fs::exists(CRETE_PROC_MAPS_PATH))
+        terminate = true;
+
+    fs::remove(CRETE_PROC_MAPS_PATH);
+    ifstream ifs("/proc/self/maps");
+    ofstream ofs(CRETE_PROC_MAPS_PATH);
+    copy(istreambuf_iterator<char>(ifs),
+         istreambuf_iterator<char>(),
+         ostreambuf_iterator<char>(ofs));
+
+    // This process must be running in order to get the proc-maps, so,
+    // if we want to have crete-run relay the proc-map info, we need to run this once and terminate it before actually testing.
+    if(terminate)
+    {
+        fprintf(stderr, "Early termination in update_proc_maps() (should be prime)\n");
+        exit(0); // Normal operating procedure to get crete-run the proc-maps for this binary. Other proc-map updates are done for sanity check (to ensure ASLR is disabled).
+    }
+}
+
 void crete_preload_initialize(int argc, char**& argv)
 {
-    // Should exit program while being launched as prime
-    crete_initialize(argc, argv);
+    // Should terminate program while being launched as prime
+    update_proc_maps();
+
+    atexit(crete_capture_end);
     // Need to call crete_capture_begin before make_concolics, or they won't be captured.
-    // crete_capture_end() is registered with atexit() in crete_initialize().
     crete_capture_begin();
 
     config::HarnessConfiguration hconfig = crete_load_configuration();
@@ -247,12 +270,12 @@ void crete_preload_initialize(int argc, char**& argv)
 #if CRETE_HOST_ENV
 bool crete_verify_executable_path_matches(const char* argv0)
 {
-    std::ifstream ifs(crete_config_file,
+    std::ifstream ifs(CRETE_CONFIG_SERIALIZED_PATH,
                       ios_base::in | ios_base::binary);
 
     if(!ifs.good())
     {
-        throw std::runtime_error("failed to open file: " + std::string(crete_config_file));
+        throw std::runtime_error("failed to open file: " + std::string(CRETE_CONFIG_SERIALIZED_PATH));
     }
 
     boost::archive::text_iarchive ia(ifs);
@@ -263,6 +286,50 @@ bool crete_verify_executable_path_matches(const char* argv0)
 }
 #endif // CRETE_HOST_ENV
 
+
+// ********************************************************* //
+// Signal handling
+#define __INIT_CRETE_SIGNAL_HANDLER(SIGNUM)                                  \
+        {                                               \
+            struct sigaction sigact;                    \
+                                                        \
+            memset(&sigact, 0, sizeof(sigact));         \
+            sigact.sa_handler = crete_signal_handler;   \
+            sigaction(SIGNUM, &sigact, NULL);           \
+                                                        \
+            sigset_t set;                               \
+            sigemptyset(&set);                          \
+            sigaddset(&set, SIGNUM);                    \
+            sigprocmask(SIG_UNBLOCK, &set, NULL);       \
+        }
+
+// Terminate the program gracefully and return the corresponding exit code
+// TODO: xxx does not handle nested signals
+static void crete_signal_handler(int signum)
+{
+    //TODO: xxx _exit() is safer, but atexit()/crete_capture_end() will not be called with _exit()
+    exit(CRETE_EXIT_CODE_SIG_BASE + signum);
+}
+
+static void init_crete_signal_handlers(void)
+{
+    __INIT_CRETE_SIGNAL_HANDLER(SIGABRT);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGFPE);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGHUP);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGINT);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGILL);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGPIPE);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGQUIT);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGSEGV);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGSYS);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGTERM);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGTSTP);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGXCPU);
+    __INIT_CRETE_SIGNAL_HANDLER(SIGXFSZ);
+
+    // SIGUSR1 for timeout
+    __INIT_CRETE_SIGNAL_HANDLER(SIGUSR1);
+}
 extern "C" {
     // The type of __libc_start_main
     typedef int (*__libc_start_main_t)(
@@ -314,6 +381,7 @@ int __libc_start_main(
             crete_preload_initialize(argc, ubp_av);
         }
 #else
+        init_crete_signal_handlers();
         crete_preload_initialize(argc, ubp_av);
 #endif // CRETE_HOST_ENV
     }

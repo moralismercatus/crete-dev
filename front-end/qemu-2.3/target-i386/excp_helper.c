@@ -22,10 +22,11 @@
 #include "sysemu/sysemu.h"
 #include "exec/helper-proto.h"
 
-#if defined(CRETE_CONFIG) && !defined(CRETE_LLVM_LIB) || 1
+#if defined(CRETE_CONFIG) || 1
+#include "runtime-dump/crete-debug.h"
 #include "runtime-dump/runtime-dump.h"
 extern CPUArchState *g_cpuState_bct;
-#endif // #if defined(CRETE_CONFIG) && !defined(CRETE_LLVM_LIB)
+#endif // #if defined(CRETE_CONFIG)
 //#define DEBUG_PCALL
 
 #if 0
@@ -100,34 +101,8 @@ static void QEMU_NORETURN raise_interrupt2(CPUX86State *env, int intno,
                                            int is_int, int error_code,
                                            int next_eip_addend)
 {
-    //CRETE: for interrupt offline replay
 #if defined(CRETE_CONFIG) || 1
-    /* BOBO:xxx assumption: all the interrupts/exceptions should finally get here
-     * */
-    if(flag_rt_dump_enable) {
-        assert(env == g_cpuState_bct && "[CRETE ERROR] Global pointer to CPU State is changed.\n");
-
-        // 0 means the current TB is being executed (but being interrupted)
-        if(crete_post_cpu_tb_exec(env, rt_dump_tb, 0, env->eip)) {
-            add_qemu_interrupt_state(runtime_env, intno, is_int, error_code, next_eip_addend);
-
-#if defined(CRETE_DEBUG)
-            if(is_int && next_eip_addend){
-                fprintf(stderr, "[CRETE Warning] next_eip_addend is not zero. Check whether the precise "
-                        "interrupt reply is correct. [check gen_intermediate_code_crete()]\n");
-            }
-
-            fprintf(stderr, "tb-%lu (pc-%p) is interrupted.\n",
-                    rt_dump_tb_count - 1, (void *)(uint64_t)rt_dump_tb->pc);
-
-            fprintf(stderr, "[raise_interrupt] intno = %d, is_int = %d, "
-                    "error_code = %d, next_eip_addend = %d,"
-                    "env->eip = %p\n",
-                    intno, is_int, error_code,
-                    next_eip_addend, (void *)(uint64_t)env->eip);
-#endif
-        }
-    }
+    crete_handle_raise_interrupt(env, intno, is_int, error_code, next_eip_addend);
 #endif
 
     CPUState *cs = CPU(x86_env_get_cpu(env));

@@ -1,5 +1,7 @@
 #CRETE User Guide
 
+[![Build Status](https://travis-ci.org/SVL-PSU/crete-dev.svg?branch=master)](https://travis-ci.org/SVL-PSU/crete-dev)
+
 ## 1. Prerequisites
 ### 1.1. Terminology
 Virtual Machine (VM)
@@ -119,7 +121,7 @@ Where &lt;memory&gt; is the amount of RAM (megabytes), &lt;img-name&gt; is the n
 Install the following dependencies on the guest OS at first:
 ```bash
 $ sudo apt-get update
-$ sudo apt-get install build-essential cmake libelf-dev unzip -y
+$ sudo apt-get install build-essential cmake libelf-dev libcap2-bin unzip -y
 ```
 
 Compile CRETE utilties on the guest OS:
@@ -153,7 +155,6 @@ echo 'export PATH=$PATH:~/guest-build/bin' >> ~/.bashrc
 echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/guest-build/bin'  >> ~/.bashrc
 echo 'export C_INCLUDE_PATH=$C_INCLUDE_PATH:~/guest/lib/include'  >> ~/.bashrc
 echo 'export LIBRARY_PATH=$LIBRARY_PATH:~/guest-build/bin'  >> ~/.bashrc
-echo 'export CRETE_RAMDISK_PATH=~/tests/ramdisk'  >> ~/.bashrc
 echo 'export LD_BIND_NOW=1'  | sudo tee --append /etc/sysctl.conf
 ```
 

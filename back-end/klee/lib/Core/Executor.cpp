@@ -129,6 +129,8 @@ using namespace metaSMT::solver;
 #if defined(CRETE_CONFIG)
 #include "crete-replayer/qemu_macros.h"
 #include "crete-replayer/debug.h"
+
+#include <crete/trace_tag.h>
 #endif // CRETE_CONFIG
 
 namespace {
@@ -2870,6 +2872,10 @@ void Executor::terminateStateOnError(ExecutionState &state,
                                      const llvm::Twine &messaget,
                                      const char *suffix,
                                      const llvm::Twine &info) {
+#if defined(CRETE_CONFIG)
+  state.print_stack();
+#endif
+
   std::string message = messaget.str();
   static std::set< std::pair<Instruction*, std::string> > emittedErrors;
   Instruction * lastInst;
@@ -3836,10 +3842,28 @@ Executor::crete_concolic_fork(ExecutionState &current, ref<Expr> condition)
     assert(!RandomizeFork &&
             "RandomizeFork is enabled, which means the statePair returned by fork could be swapped.\n");
 
+    // Check against trace tag
+    // Only check trace tag when klee is executing the captured code
+    //  (code from helper functions and klee's own code for checking should
+    //  not check with trace tag)
+    bool check_trace_tag = (current.stack.size() == 2) ? true:false;
+
+    bool branch_taken;
+    bool explored_node;
+    if(check_trace_tag) {
+        current.check_trace_tag(branch_taken, explored_node);
+    }
+
     Executor::StatePair branches;
     // Fork now is only disabled when handling crete_assume()
-    if(current.crete_fork_enabled)
-    	branches = fork(current, condition, false);
+    if(current.crete_fork_enabled && !crete_manual_disable_fork(current))
+    {
+        // Does not fork when "check_trace_tag" is valid and the node/branch has been not explored
+        if(!check_trace_tag || !explored_node)
+        {
+            branches = fork(current, condition, false);
+        }
+    }
 
     ExecutionState *trueState  = branches.first;
     ExecutionState *falseState = branches.second;
@@ -3847,6 +3871,24 @@ Executor::crete_concolic_fork(ExecutionState &current, ref<Expr> condition)
     ref<Expr> evalResult = current.concolics.evaluate(condition);
     assert(isa<ConstantExpr>(evalResult));
     ref<ConstantExpr> condition_value = dyn_cast<ConstantExpr>(evalResult);
+
+    if(check_trace_tag)
+    {
+        assert(branch_taken == condition_value->isTrue());
+    } else {
+        // FIXME: xxx
+        // klee may fork from outside captured bitcode, such as fork from
+        // qemu's helper functions, and KLEE's check (over_shift check, etc).
+        // Test cases generated from those forks should be treated specially,
+        // as they are not for exploring a new path back to the binary under
+        // test and should not be a part of the trace tag process.
+        if(trueState && falseState){
+            current.print_stack();
+
+            assert(!(trueState && falseState) &&
+                    "[CRETE FIXME] klee forks not from captured bitcode.\n");
+        }
+    }
 
     if(trueState && falseState){
         if (condition_value->isTrue()) {
@@ -3938,6 +3980,19 @@ void Executor::crete_preprocess_memory_operation(ExecutionState &state,
         }
         bindObjectInState(state, temp_mo, false);
     }
+}
+
+bool Executor::crete_manual_disable_fork(const ExecutionState &state)
+{
+    bool ret = false;
+
+    // 1. check for hard-coded tb
+    if(state.stack.size() == 2)
+    {
+        ret = ret || is_in_fork_blacklist(state.crete_current_tb_pc);
+    }
+
+    return ret;
 }
 
 /// crete internal functions
@@ -4289,12 +4344,11 @@ void Executor::handleCreteQemuTbPrologue(klee::Executor* executor,
 		klee::KInstruction* target,
 		std::vector<klee::ref<klee::Expr> > &args)
 {
-	assert(args.size() == 1);
+	assert(args.size() == 2);
 
 	ref<Expr> tb_index = args[0];
 	assert(isa<klee::ConstantExpr>(tb_index)
 			&& "Input of tb_qemu_prelogue should be constant!\n");
-
     ConstantExpr *ce = dyn_cast<ConstantExpr>(tb_index);
     uint64_t tb_index_value = ce->getZExtValue();
 
@@ -4308,7 +4362,14 @@ void Executor::handleCreteQemuTbPrologue(klee::Executor* executor,
     );
 
     assert(state->m_qemu_tb_count == tb_index_value);
-    ++state->m_qemu_tb_count;
+
+    // set current_tb_pc
+    ref<Expr> tb_pc= args[1];
+    assert(isa<klee::ConstantExpr>(tb_pc)
+            && "Input of tb_qemu_prelogue should be constant!\n");
+    ConstantExpr *ce_tb_pc = dyn_cast<ConstantExpr>(tb_pc);
+    uint64_t tb_pc_value = ce_tb_pc->getZExtValue();
+    state->crete_current_tb_pc = tb_pc_value;
 
     // synchronize memory
     executor->crete_sync_memory(*state, tb_index_value);
@@ -4334,6 +4395,8 @@ void Executor::handleCreteQemuTbPrologue(klee::Executor* executor,
         state->crete_tb_tainted = false;
     }
     );
+
+    ++state->m_qemu_tb_count;
 }
 
 void Executor::handleCreteFinishReply(klee::Executor* executor,
@@ -4361,6 +4424,8 @@ void Executor::handleCreteFinishReply(klee::Executor* executor,
     );
 
     CRETE_DBG_TA(assert(!state->crete_dbg_ta_fail););
+
+    executor->terminateState(*state);
 }
 
 
@@ -4504,6 +4569,9 @@ void Executor::handleQemuRaiseInterrupt2(klee::Executor* executor,
   		  klee::KInstruction* target,
   		  std::vector<klee::ref<klee::Expr> > &args) {
     assert(args.size() == 5);
+
+    state->print_stack();
+    assert(0 && "[Crete Error] Interrupt should be invisible from klee side.\n");
 
 	// Get the concrete value of each arguments in the current execution of klee
 	ref<Expr> exp_intno = args[1];

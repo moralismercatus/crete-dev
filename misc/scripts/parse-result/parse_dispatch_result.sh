@@ -14,7 +14,7 @@ error_summary()
 
 
     printf "Totoal error: "
-    grep -c '\[2016\-' $INPUT_DIR/log/node_error.log
+    grep -c '\[2017\-' $INPUT_DIR/log/node_error.log
     printf "SVM error: "
     grep -c -w 'Node: SVM' $INPUT_DIR/log/node_error.log
 
@@ -25,7 +25,7 @@ error_summary()
     grep -c "Assertion.*crete_dbg_ta_fail.*failed." < $INPUT_DIR/log/node_error.log
 
     printf "missing helper functions: "
-    grep -c "Executor.cpp\:2939.*Assertion.*failed." < $INPUT_DIR/log/node_error.log
+    grep -c "^\[CRETE ERROR\] Calling external function.* missing in helper.bc from qemu." < $INPUT_DIR/log/node_error.log
 
     printf "\nLoad MO missing: "
     grep -c "Load\sMO\smissing\!" < $INPUT_DIR/log/node_error.log
@@ -50,11 +50,17 @@ error_summary()
     grep -c "^KLEE\: WARNING\: killing 1 states (over memory cap)" < $INPUT_DIR/log/node_error.log
     printf "HaltTimer: "
     grep -c "KLEE: HaltTimer invoked" < $INPUT_DIR/log/node_error.log
+    printf "Invalid test case: "
+    grep -c "Invalid test case" < $INPUT_DIR/log/node_error.log
+    printf "Trace-tag: forking not from captured bitcode: "
+    grep -c "klee: Executor.cpp.*Executor::StatePair klee::Executor::crete_concolic_fork(klee::ExecutionState &, ref<klee::Expr>).*\[CRETE FIXME\] klee forks not from captured bitcode.* failed." < $INPUT_DIR/log/node_error.log
 
     printf "\nVM error: "
     grep -c -w 'Node:\sVM' $INPUT_DIR/log/node_error.log
     printf "getHostAddress() error: "
     grep -c -w 'getHostAddress\(\)' $INPUT_DIR/log/node_error.log
+    printf "trace-tag-error: "
+    grep -c "crete-qemu-2.3-system-i386:.*void RuntimeEnv::add_trace_tag(const TranslationBlock\*, uint64_t): Assertion .* failed."  < $INPUT_DIR/log/node_error.log
 }
 
 error_detail()
@@ -72,7 +78,7 @@ error_detail()
 
     for folder in "${folder_list[@]}"
     do
-        grep -c "2016.*$folder" $INPUT_DIR/log/node_error.log | \
+        grep -c "2017.*$folder" $INPUT_DIR/log/node_error.log | \
             { read error_count; \
             trace_num=$(tail -1 $INPUT_DIR/$folder/log/finish.log | grep -P '\d+' -o | awk 'NR==5'); \
             failure_percent=$((100*$error_count/$trace_num)); \

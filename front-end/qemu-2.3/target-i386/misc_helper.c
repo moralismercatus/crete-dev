@@ -22,6 +22,13 @@
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
 
+#if defined(CRETE_CONFIG) || 1
+#include "runtime-dump/runtime-dump.h"
+#include "runtime-dump/crete-debug.h"
+
+extern CPUArchState *g_cpuState_bct;
+#endif // #if defined(CRETE_CONFIG)
+
 void helper_outb(uint32_t port, uint32_t data)
 {
     cpu_outb(port, data & 0xff);
@@ -194,6 +201,10 @@ void helper_rdtsc(CPUX86State *env)
     val = cpu_get_tsc(env) + env->tsc_offset;
     env->regs[R_EAX] = (uint32_t)(val);
     env->regs[R_EDX] = (uint32_t)(val >> 32);
+
+#if defined(CRETE_CONFIG) || 1
+    helper_rdtsc_invoked = 1;
+#endif
 }
 
 void helper_rdtscp(CPUX86State *env)
@@ -550,6 +561,18 @@ void helper_hlt(CPUX86State *env, int next_eip_addend)
     cpu_svm_check_intercept_param(env, SVM_EXIT_HLT, 0);
     env->eip += next_eip_addend;
 
+#if defined(CRETE_CONFIG) || 1
+
+    // 0 means the current TB has been executed but stopped in the middle (until env->eip)
+    if(crete_post_cpu_tb_exec(env, rt_dump_tb, 0, env->eip))
+    {
+        CRETE_DBG_GEN(
+        fprintf(stderr, "tb-%lu (pc-%p) calls into helper_hlt().\n",
+                rt_dump_tb_count - 1, (void *)(uint64_t)rt_dump_tb->pc);
+        );
+    }
+#endif
+
     do_hlt(cpu);
 }
 
@@ -573,6 +596,17 @@ void helper_mwait(CPUX86State *env, int next_eip_addend)
     cpu_svm_check_intercept_param(env, SVM_EXIT_MWAIT, 0);
     env->eip += next_eip_addend;
 
+#if defined(CRETE_CONFIG) || 1
+    // 0 means the current TB has been executed but stopped in the middle (until env->eip)
+    if(crete_post_cpu_tb_exec(env, rt_dump_tb, 0, env->eip))
+    {
+        CRETE_DBG_GEN(
+        fprintf(stderr, "tb-%lu (pc-%p) calls into helper_mwait().\n",
+                rt_dump_tb_count - 1, (void *)(uint64_t)rt_dump_tb->pc);
+        );
+    }
+#endif
+
     cpu = x86_env_get_cpu(env);
     cs = CPU(cpu);
     /* XXX: not complete but not completely erroneous */
@@ -589,6 +623,17 @@ void helper_pause(CPUX86State *env, int next_eip_addend)
 
     cpu_svm_check_intercept_param(env, SVM_EXIT_PAUSE, 0);
     env->eip += next_eip_addend;
+
+#if defined(CRETE_CONFIG) || 1
+    // 0 means the current TB has been executed but stopped in the middle (until env->eip)
+    if(crete_post_cpu_tb_exec(env, rt_dump_tb, 0, env->eip))
+    {
+        CRETE_DBG_GEN(
+        fprintf(stderr, "tb-%lu (pc-%p) calls into helper_pause().\n",
+                rt_dump_tb_count - 1, (void *)(uint64_t)rt_dump_tb->pc);
+        );
+    }
+#endif
 
     do_pause(cpu);
 }

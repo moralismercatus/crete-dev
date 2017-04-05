@@ -33,6 +33,7 @@ struct Interval
     uint64_t trace{0};
     uint64_t tc{0};
     uint64_t time{0};
+    uint64_t new_inst_wait_time{0};
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version)
@@ -42,6 +43,7 @@ struct Interval
         ar & trace;
         ar & tc;
         ar & time;
+        ar & new_inst_wait_time;
     }
 };
 
@@ -143,7 +145,7 @@ struct SVM
 
 struct Trace
 {
-    bool filter_traces{true};
+    bool filter_traces{true}; // TODO: xxx unused?
     bool print_trace_selection{false};
     bool print_graph{false};
     bool print_graph_only_branches{false}; // TODO: Now redundant. We only dump 'branches.'

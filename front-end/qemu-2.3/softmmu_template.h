@@ -27,6 +27,7 @@
 
 #if defined(CRETE_CONFIG) || 1
 #include "runtime-dump/runtime-dump.h"
+#include "runtime-dump/crete-debug.h"
 #endif
 
 #define DATA_SIZE (1 << SHIFT)
@@ -221,9 +222,9 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #if defined(CRETE_ENABLE_MEMORY_MONITOR)
         if(flag_rt_dump_enable) {
 #if defined(CRETE_DEBUG) || 1
-            fprintf(stderr, "[Ld Memo Monitor] le IO access: addr = %p, size = %u, res = 0x%lu\n",
-                    (void *)(uint64_t)addr, (uint32_t)DATA_SIZE, (uint64_t)res);
-            assert(0 && "[Ld Memo Monitor] le IO access");
+//            fprintf(stderr, "[Ld Memo Monitor] le IO access: addr = %p, size = %u, res = 0x%lu\n",
+//                    (void *)(uint64_t)addr, (uint32_t)DATA_SIZE, (uint64_t)res);
+//            assert(0 && "[Ld Memo Monitor] le IO access");
 #endif // defined(CRETE_DEBUG)
             dump_memo_sync_table_entry(runtime_env, addr, DATA_SIZE, res);
         }
@@ -576,6 +577,21 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
 #else
     glue(glue(st, SUFFIX), _le_p)((uint8_t *)haddr, val);
 #endif
+
+#if defined(CRETE_DBG_TA)
+    {
+        uint64_t i = 0;
+        for(; i < DATA_SIZE; ++i)
+        {
+            if(is_in_list_crete_dbg_ta_guest_addr(addr+i))
+            {
+                fprintf(stderr, "[%p] = %d, tb-pc = %p\n",
+                        (void *)(addr+i), (int)(val >> i*8) & 0xff,
+                        (void *)(uint64_t)((TranslationBlock *)rt_dump_tb)->pc);
+            }
+        }
+    }
+#endif
 }
 
 #if DATA_SIZE > 1
@@ -653,6 +669,21 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
 
     haddr = addr + env->tlb_table[mmu_idx][index].addend;
     glue(glue(st, SUFFIX), _be_p)((uint8_t *)haddr, val);
+
+#if defined(CRETE_DBG_TA)
+    {
+        uint64_t i = 0;
+        for(; i < DATA_SIZE; ++i)
+        {
+            if(is_in_list_crete_dbg_ta_guest_addr(addr+i))
+            {
+                fprintf(stderr, "[%p] = %d, tb-pc = %p\n",
+                        (void *)(addr+i), (int)(val >> i*8) & 0xff,
+                        (void *)(uint64_t)((TranslationBlock *)rt_dump_tb)->pc);
+            }
+        }
+    }
+#endif
 }
 #endif /* DATA_SIZE > 1 */
 

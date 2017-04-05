@@ -500,20 +500,18 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
     int temp_crete_read_was_symbolic = 0;
 #endif
 
-#if defined(CRETE_DBG_CK) && 0
-    fprintf(stderr, "TCG_REG_CALL_STACK = %d, "
-            "CPU_TEMP_BUF_NLONGS = %d, "
-            "tcg_temps = %p, \n"
-            "sizeof(long) = %u, "
-            "(tcg_temps + CPU_TEMP_BUF_NLONGS) = %p, "
-            "sp_value = %p\n",
-            (uint32_t)TCG_REG_CALL_STACK,
-            (uint32_t)CPU_TEMP_BUF_NLONGS,
-            &tcg_temps[0],
-            (uint32_t)sizeof(long),
-            (void *)(uint64_t)(tcg_temps + CPU_TEMP_BUF_NLONGS),
-            (void *)(uint64_t)sp_value);
+    // trace tag
+#if defined(CRETE_TRACE_TAG) || 1
+    clear_current_tb_br_taken();
 #endif
+
+#if defined(CRETE_MANUAL_CODE_SELECTION) || 1
+    helper_rdtsc_invoked = 0;
+#endif
+
+    CRETE_DBG_TT(
+    assert(get_size_current_tb_br_taken() == 0);
+    );
 
     for (;;) {
         TCGOpcode opc = tb_ptr[0];
@@ -544,7 +542,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
         tb_ptr += 2;
 
 #if defined(CRETE_DEP_ANALYSIS) || 1
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
         const TCGOpDef *def;
         def = &tcg_op_defs[opc];
 
@@ -614,7 +612,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             crete_tci_call_64(arg0, arg1, arg2, arg3, arg5);
 #endif
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)) {
                 fprintf(stderr, "\tbefore call:");
                 {
@@ -627,12 +625,22 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
                         fprintf(stderr, " 0x%02x", byte_value);
                     }
                     fprintf(stderr, "]\n");
+
+                    fprintf(stderr, "input args: "
+                            "arg0 = %p, "
+                            "arg1 = %p, "
+                            "arg2 = %p, "
+                            "arg3 = %p, "
+                            "arg5 = %p\n",
+                            (void *)(uint64_t)arg0,
+                            (void *)(uint64_t)arg1, (void *)(uint64_t)arg2,
+                            (void *)(uint64_t)arg3, (void *)(uint64_t)arg5);
                 }
             }
 #endif
             tmp64 = ((helper_function)t0)(arg0, arg1, arg2, arg3, arg5);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)) {
                 fprintf(stderr, "\t");
                 crete_print_helper_function_name((uint64_t) t0);
@@ -729,7 +737,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t1 = tci_read_r(&tb_ptr);
             t2 = tci_read_s32(&tb_ptr);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)){
                 if((uint64_t)t1 == (uint64_t)env) {
                     char reg_name[50];
@@ -780,7 +788,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             assert(t1 != sp_value || (int32_t)t2 < 0);
             *(uint32_t *)(t1 + t2) = t0;
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc))
             {
                 if((uint64_t)t1 == (uint64_t)env) {
@@ -811,7 +819,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t2 = tci_read_ri32(&tb_ptr);
             tci_write_reg32(t0, t1 + t2);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc))
             {
                 fprintf(stderr, "\t tcg_reg[%lu] = %p + %p\n",
@@ -825,7 +833,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t2 = tci_read_ri32(&tb_ptr);
             tci_write_reg32(t0, t1 - t2);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc))
             {
                 fprintf(stderr, "\t tcg_reg[%lu] = %p - %p\n",
@@ -944,8 +952,18 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
                 assert(tb_ptr == old_code_ptr + op_size);
                 tb_ptr = (uint8_t *)label;
 
+#if defined(CRETE_TRACE_TAG) || 1
+                add_current_tb_br_taken(1);
+#endif
+
                 continue;
             }
+#if defined(CRETE_TRACE_TAG) || 1
+            else {
+                add_current_tb_br_taken(0);
+            }
+#endif
+
 
             break;
 #if TCG_TARGET_REG_BITS == 32
@@ -972,8 +990,17 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
                 assert(tb_ptr == old_code_ptr + op_size);
                 tb_ptr = (uint8_t *)label;
 
+#if defined(CRETE_TRACE_TAG) || 1
+                add_current_tb_br_taken(1);
+#endif
+
                 continue;
             }
+#if defined(CRETE_TRACE_TAG) || 1
+            else {
+                add_current_tb_br_taken(0);
+            }
+#endif
 
             break;
         case INDEX_op_mulu2_i32:
@@ -1046,7 +1073,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t1 = tci_read_r64(&tb_ptr);
             tci_write_reg64(t0, t1);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)) {
                 fprintf(stderr, "\t mov value (%p) to tcg_reg[%lu]\n",
                         (void *)(uint64_t)t1, t0);
@@ -1105,7 +1132,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t1 = tci_read_r(&tb_ptr);
             t2 = tci_read_s32(&tb_ptr);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)){
                 if((uint64_t)t1 == (uint64_t)env) {
                     char reg_name[50];
@@ -1169,7 +1196,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             crete_tci_st_i64(t1, t2);
 #endif // defined(CRETE_DEP_ANALYSIS)
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc))
             {
                 if((uint64_t)t1 == (uint64_t)env) {
@@ -1197,7 +1224,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t2 = tci_read_ri64(&tb_ptr);
             tci_write_reg64(t0, t1 + t2);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc))
             {
                 fprintf(stderr, "\t tcg_reg[%lu] = %p + %p\n",
@@ -1212,7 +1239,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t2 = tci_read_ri64(&tb_ptr);
             tci_write_reg64(t0, t1 - t2);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc))
             {
                 fprintf(stderr, "\t tcg_reg[%lu] = %p - %p\n",
@@ -1312,8 +1339,17 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
                 assert(tb_ptr == old_code_ptr + op_size);
                 tb_ptr = (uint8_t *)label;
 
+#if defined(CRETE_TRACE_TAG) || 1
+                add_current_tb_br_taken(1);
+#endif
+
                 continue;
             }
+#if defined(CRETE_TRACE_TAG) || 1
+            else {
+                add_current_tb_br_taken(0);
+            }
+#endif
 
             break;
 #if TCG_TARGET_HAS_ext8u_i64
@@ -1415,12 +1451,8 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             t0 = tci_read_i32(&tb_ptr);
 
 #if defined(CRETE_CONFIG) || 1
-            /* BOBO: xxx To disable the direct jump between TBs */
-            if(is_begin_capture && is_target_pid && is_user_code &&
-                    t0 != 0){
-//              printf("op_goto_tb: t0 = %ld.\n", t0);
-                t0 = 0;
-            }
+            /* To disable the direct jump between TBs */
+            t0 = 0;
 #endif //#if defined(CRETE_CONFIG)
 
             assert(tb_ptr == old_code_ptr + op_size);
@@ -1492,7 +1524,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
             }
             tci_write_reg(t0, tmp32);
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)) {
                 fprintf(stderr, "\t taddr = %p, tcg_reg[%lu](ld_ret) = %p\n",
                         (void *)(uint64_t)taddr, t0, (void *)(uint64_t)tmp32);
@@ -1653,7 +1685,7 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
                 tcg_abort();
             }
 
-#if defined(CRETE_DBG_CK)
+#if defined(CRETE_DEBUG_GENERAL)
             if(is_in_list_crete_dbg_tb_pc(rt_dump_tb->pc)) {
                 fprintf(stderr, "\t taddr = %p, st-value = %p\n",
                         (void *)(uint64_t)taddr, (void *)(uint64_t)t0);
@@ -1736,5 +1768,6 @@ uintptr_t crete_tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr)
         assert(tb_ptr == old_code_ptr + op_size);
     }
 exit:
+
     return next_tb;
 }

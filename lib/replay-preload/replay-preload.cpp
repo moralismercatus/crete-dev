@@ -1,3 +1,4 @@
+#include <crete/common.h>
 #include <crete/exception.h>
 #include <crete/test_case.h>
 #include <crete/harness_config.h>
@@ -35,10 +36,7 @@ extern "C" {
 using namespace std;
 namespace fs = boost::filesystem;
 
-static const string replay_log_file = "crete.replay.log";
-static const string replay_current_tc = "crete.replay.current.tc.bin";
 static const string replay_stdin_filename= "crete.replay.stdin.file";
-static const string replay_guest_config = "crete.replay.guest.config.serialized";
 
 namespace crete
 {
@@ -74,11 +72,11 @@ CreteReplayPreload::CreteReplayPreload(int argc, char **argv):
 
 void CreteReplayPreload::init_guest_config()
 {
-    std::ifstream ifs(replay_guest_config.c_str());
+    std::ifstream ifs(CRETE_CONFIG_SERIALIZED_PATH);
 
     if(!ifs.good())
     {
-        BOOST_THROW_EXCEPTION(crete::Exception() << err::file_open_failed(replay_guest_config));
+        BOOST_THROW_EXCEPTION(crete::Exception() << err::file_open_failed(CRETE_CONFIG_SERIALIZED_PATH));
     }
 
     try
@@ -96,11 +94,11 @@ void CreteReplayPreload::init_guest_config()
 }
 void CreteReplayPreload::init_current_tc()
 {
-    std::ifstream ifs(replay_current_tc.c_str());
+    std::ifstream ifs(CRETE_REPLAY_CURRENT_TC);
     if(!ifs.good())
     {
         BOOST_THROW_EXCEPTION(Exception() <<
-                err::file_open_failed(replay_current_tc));
+                err::file_open_failed(CRETE_REPLAY_CURRENT_TC));
     }
 
     TestCase tc = read_test_case(ifs);
@@ -315,23 +313,26 @@ void CreteReplayPreload::setup_concolic_stdin()
 
 // ********************************************************* //
 // Signal handling
-static sighandler_t default_signal_hanlders[_NSIG];
+#define __INIT_CRETE_SIGNAL_HANDLER(SIGNUM)                                  \
+        {                                               \
+            struct sigaction sigact;                    \
+                                                        \
+            memset(&sigact, 0, sizeof(sigact));         \
+            sigact.sa_handler = crete_signal_handler;   \
+            sigaction(SIGNUM, &sigact, NULL);           \
+                                                        \
+            sigset_t set;                               \
+            sigemptyset(&set);                          \
+            sigaddset(&set, SIGNUM);                    \
+            sigprocmask(SIG_UNBLOCK, &set, NULL);       \
+        }
 
-#define __INIT_CRETE_SIGNAL_HANDLER(SIGNUM)                                     \
-        default_signal_hanlders[SIGNUM] = signal(SIGNUM, crete_signal_handler); \
-        assert(default_signal_hanlders[SIGNUM] != SIG_ERR);
-
-// Log the signal and call the default signal handler
-// TODO: xxx A certain kind of signal will only be caught once
+// Terminate the program gracefully and return the corresponding exit code
+// TODO: xxx does not handle nested signals
 static void crete_signal_handler(int signum)
 {
-    static int caught_signal_count = 0;
-
-    fprintf(stderr, "[Signal Caught](%d): signum = %d (%s)\n",
-            caught_signal_count, signum, strsignal(signum));
-
-    signal(signum, default_signal_hanlders[signum]);
-    raise(signum);
+    //TODO: xxx _exit() is safer, but gcov will not generate coverage report with _exit()
+    exit(CRETE_EXIT_CODE_SIG_BASE + signum);
 }
 
 static void init_crete_signal_handlers(int argc, char **argv)
@@ -349,6 +350,9 @@ static void init_crete_signal_handlers(int argc, char **argv)
     __INIT_CRETE_SIGNAL_HANDLER(SIGTSTP);
     __INIT_CRETE_SIGNAL_HANDLER(SIGXCPU);
     __INIT_CRETE_SIGNAL_HANDLER(SIGXFSZ);
+
+    // SIGUSR1 for timeout
+    __INIT_CRETE_SIGNAL_HANDLER(SIGUSR1);
 }
 
 // ********************************************************* //
@@ -374,6 +378,7 @@ int __libc_start_main(
 
     try
     {
+        unsetenv("LD_PRELOAD"); // Prevent nested LD_PRELOAD for processes started by the current process
         orig_libc_start_main = (__libc_start_main_t)dlsym(RTLD_NEXT, "__libc_start_main");
 
         if(orig_libc_start_main == 0)

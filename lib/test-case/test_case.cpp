@@ -5,7 +5,9 @@
 #include <external/alphanum.hpp>
 
 #include <boost/filesystem/fstream.hpp>
-
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/serialization/vector.hpp>
 
 #include <cassert>
 #include <iomanip>
@@ -80,6 +82,15 @@ namespace crete
         crete::write(os, elems_);
     }
 
+    void TestCase::set_traceTag(const creteTraceTag_ty &explored_nodes,
+            const creteTraceTag_ty &semi_explored_node, const creteTraceTag_ty &new_nodes)
+    {
+        // TODO: XXX check the input explored_nodes is consistent with m_explored_nodes
+        m_explored_nodes = explored_nodes;
+        m_semi_explored_node = semi_explored_node;
+        m_new_nodes = new_nodes;
+    }
+
     TestCaseElement read_test_case_element(istream& is)
     {
         TestCaseElement elem;
@@ -133,7 +144,7 @@ namespace crete
 
         if(ssize > 1000000)
         {
-             BOOST_THROW_EXCEPTION(Exception() << err::msg("Sanity check: test case file size is unexpectedly large (size > 1000000)."));
+            BOOST_THROW_EXCEPTION(Exception() << err::msg("Sanity check: test case file size is unexpectedly large (size > 1000000)."));
         }
 
         uint32_t elem_count;
@@ -211,7 +222,12 @@ namespace crete
         {
             fs::path entry(*it);
 
-            CRETE_EXCEPTION_ASSERT(fs::file_size(entry) >= 4, err::file(entry.string()));
+            // Test case with no elements
+            // TODO: xxx report after retrieve all the valid test cases
+            if(fs::file_size(entry) <= 4)
+            {
+                BOOST_THROW_EXCEPTION(Exception() << err::msg("Invalid test case: empty elements."));
+            }
 
             fs::ifstream tests_file(entry);
             CRETE_EXCEPTION_ASSERT(tests_file.good(), err::file_open_failed(entry.string()));
@@ -234,4 +250,77 @@ namespace crete
         return read_test_case(tests_file);
     }
 
+    void write_serialized(ostream& os, const TestCase& tc)
+    {
+        try {
+            boost::archive::binary_oarchive oa(os);
+            oa << tc;
+        }
+        catch(std::exception &e){
+            BOOST_THROW_EXCEPTION(Exception() << err::msg("Serialization error in write_serialized()\n"));
+        };
+    }
+
+    TestCase read_serialized(istream& is)
+    {
+        try {
+            TestCase tc;
+            boost::archive::binary_iarchive ia(is);
+            ia >> tc;
+
+            return tc;
+        }
+        catch(std::exception &e){
+            BOOST_THROW_EXCEPTION(Exception() << err::msg("Serialization error in read_serialized()\n"));
+        };
+    }
+
+    TestCase retrieve_test_serialized(const std::string& tc_path)
+    {
+        namespace fs = boost::filesystem;
+        fs::ifstream tests_file(tc_path);
+        CRETE_EXCEPTION_ASSERT(tests_file.good(), err::file_open_failed(tc_path));
+
+        return read_serialized(tests_file);
+    }
+
+    // Return empty vector if the folder does not exist or is empty
+    vector<TestCase> retrieve_tests_serialized(const string& tc_dir)
+    {
+        namespace fs = boost::filesystem;
+
+        const fs::path test_pool_dir(tc_dir);
+
+        if(!fs::exists(test_pool_dir))
+        {
+            return vector<TestCase>();
+        }
+
+        assert(fs::is_directory(test_pool_dir));
+
+        // Sort the files alphabetically
+        vector<string> v;
+        for ( fs::directory_iterator itr( test_pool_dir );
+              itr != fs::directory_iterator();
+              ++itr ){
+            v.push_back(itr->path().string());
+        }
+
+        sort(v.begin(), v.end(), doj::alphanum_less<string>());
+//        sort(v.begin(), v.end());
+        vector<TestCase> tests;
+
+        for (vector<string>::const_iterator it(v.begin()), it_end(v.end());
+                it != it_end; ++it)
+        {
+            fs::path entry(*it);
+
+            fs::ifstream tests_file(entry);
+            CRETE_EXCEPTION_ASSERT(tests_file.good(), err::file_open_failed(entry.string()));
+
+            tests.push_back(read_serialized(tests_file));
+        }
+
+        return tests;
+    }
 }

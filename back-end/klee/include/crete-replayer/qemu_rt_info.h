@@ -8,6 +8,7 @@
 
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/map.hpp>
+#include <crete/trace_tag.h>
 
 using namespace std;
 
@@ -32,6 +33,7 @@ const uint64_t KLEE_ALLOC_RANGE_HIGH = 0x7FFFFFFF;
 /* Functions for klee */
 QemuRuntimeInfo* qemu_rt_info_initialize();
 void qemu_rt_info_cleanup(QemuRuntimeInfo *qrt);
+bool is_in_fork_blacklist(uint64_t tb_pc);
 
 /*****************************/
 /* structs and classes */
@@ -131,6 +133,11 @@ private:
     uint64_t m_streamed_tb_count;
     uint64_t m_streamed_index;
 
+    // For trace tag
+    crete::creteTraceTag_ty m_trace_tag_explored;
+    crete::creteTraceTag_ty m_trace_tag_semi_explored;
+    crete::creteTraceTag_ty m_trace_tag_new;
+
     // For Debugging Purpose:
     // The CPUState after each interested TB being executed for cross checking on klee side
     vector<cpuStateSyncTable_ty> m_debug_cpuStateSyncTables;
@@ -159,6 +166,14 @@ public:
 	__attribute__ ((deprecated));
 	void verify_CpuSate_offset(string name, uint64_t offset, uint64_t size);
 
+	//trace tag
+	void check_trace_tag(uint64_t tt_tag_index, uint64_t tb_index,
+	        vector<bool>& branch_taken, vector<bool>& current_node_br_taken_semi_explored,
+	        bool& explored_node) const;
+	void get_trace_tag_for_tc(uint64_t tt_tag_index,
+	        crete::creteTraceTag_ty &tt_tag_for_tc,
+	        vector<bool>& current_node_br_taken_semi_explored) const;
+
 private:
 	//TODO: xxx not a good solution
 	void check_file_symbolics();
@@ -168,16 +183,14 @@ private:
 	void read_streamed_trace();
 	uint32_t read_cpuSyncTables();
 	uint32_t read_debug_cpuSyncTables();
+	uint32_t read_memoSyncTables();
 	void read_debug_cpuState_offsets();
 
-	void init_memoSyncTables();
 	void init_interruptStates();
-	//    uint32_t read_memoSyncTables();
 	//    uint32_t read_interruptStates();
 
 	void init_concolics();
 	void init_initial_cpuState();
-	void verify_init() const;
 
 	// Debugging
 	void init_debug_cpuOffsetTable();

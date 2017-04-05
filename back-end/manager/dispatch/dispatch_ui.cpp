@@ -95,6 +95,7 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
         opts.test.interval.trace = test.get<uint64_t>("interval.trace", std::numeric_limits<uint64_t>::max());
         opts.test.interval.tc = test.get<uint64_t>("interval.tc", std::numeric_limits<uint64_t>::max());
         opts.test.interval.time = test.get<uint64_t>("interval.time", std::numeric_limits<uint64_t>::max());
+        opts.test.interval.new_inst_wait_time = test.get<uint64_t>("interval.new_inst_wait_time", std::numeric_limits<uint64_t>::max());
 
         if(opts.mode.distributed)
         {
@@ -149,6 +150,7 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
         opts.test.interval.trace = std::numeric_limits<uint64_t>::max();
         opts.test.interval.tc = std::numeric_limits<uint64_t>::max();
         opts.test.interval.time = std::numeric_limits<uint64_t>::max();
+        opts.test.interval.new_inst_wait_time = std::numeric_limits<uint64_t>::max();
     }
 
 
@@ -173,7 +175,7 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
                 BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{p.string()});
             }
 
-            return read_test_case(ifs);
+            return read_serialized(ifs);
         }();
 
         if(opts.mode.distributed)

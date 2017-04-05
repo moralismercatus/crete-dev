@@ -9,6 +9,7 @@
 #include <crete/serialize.h>
 #include <crete/async_task.h>
 #include <crete/logger.h>
+#include <crete/guest_data_post_exec.hpp>
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -68,21 +69,24 @@ struct start // Basically, serves as constructor.
                    "",
                    "",
                    false,
-                   ""} {}
+                   "",
+                   true} {}
     start(const cluster::option::Dispatch& dispatch_options,
           const node::option::VMNode& node_options,
           const fs::path& vm_dir,
           const fs::path& image_path,
           const fs::path& test_target_archive,
           bool first_vm,
-          const std::string& target)
+          const std::string& target,
+          const bool clear_trace_folder)
         : dispatch_options_(dispatch_options) // TODO: seems to be an error in Clang 3.2 initializer syntax. Workaround: using parenthesese.
         , node_options_{node_options}
         , vm_dir_{vm_dir}
         , image_path_{image_path}
         , test_target_archive_{test_target_archive}
         , first_vm_{first_vm}
-        , target_{target} {}
+        , target_{target}
+        , clear_trace_folder_(clear_trace_folder){}
 
     cluster::option::Dispatch dispatch_options_;
     node::option::VMNode node_options_;
@@ -91,6 +95,7 @@ struct start // Basically, serves as constructor.
     fs::path test_target_archive_;
     bool first_vm_;
     std::string target_;
+    bool clear_trace_folder_;
 };
 
 struct next_test
@@ -132,6 +137,7 @@ public:
     auto image_path() const -> fs::path;
     auto pwd() -> const fs::path&;
     auto guest_data() -> const GuestData&;
+    auto get_guest_data_post_exec() -> const GuestDataPostExec&;
     auto initial_test() -> const TestCase&;
     auto error() -> const log::NodeError&;
 
@@ -279,6 +285,8 @@ private:
     crete::log::Logger exception_log_;
     log::NodeError error_log_;
 
+    std::shared_ptr<GuestDataPostExec> guest_data_post_exec_{std::make_shared<GuestDataPostExec>()};
+
     // Testing
     boost::thread qemu_stream_capture_thread_;
 };
@@ -364,6 +372,12 @@ inline
 auto QemuFSM_::trace() const -> const fs::path&
 {
     return *trace_;
+}
+
+inline
+auto QemuFSM_:: get_guest_data_post_exec() -> const GuestDataPostExec&
+{
+    return *guest_data_post_exec_;
 }
 
 inline
@@ -562,7 +576,11 @@ struct QemuFSM_::clean
     {
         auto hostfile_dir = ev.vm_dir_ / hostfile_dir_name;
 
-        fs::remove_all(ev.vm_dir_ / trace_dir_name);
+        if(ev.clear_trace_folder_)
+        {
+            fs::remove_all(ev.vm_dir_ / trace_dir_name);
+        }
+
         fs::remove_all(ev.vm_dir_ / log_dir_name);
         fs::remove(hostfile_dir / input_args_name);
         fs::remove(hostfile_dir / trace_ready_name);
@@ -746,7 +764,7 @@ struct QemuFSM_::start_test
             BOOST_THROW_EXCEPTION(Exception{} << err::file{in_args_path.string()});
         }
 
-        ev.tc_.write(ofs);
+        write_serialized(ofs, ev.tc_);
 
         try
         {
@@ -766,7 +784,8 @@ struct QemuFSM_::store_trace
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState& ts) -> void
     {
         ts.async_task_.reset(new AsyncTask{[](const fs::path vm_dir,
-                                              std::shared_ptr<fs::path> trace)
+                                              std::shared_ptr<fs::path> trace,
+                                              std::shared_ptr<GuestDataPostExec> guest_data_post_exec)
         {
             auto trace_ready = vm_dir / hostfile_dir_name / trace_ready_name;
             auto trace_dir = vm_dir / trace_dir_name;
@@ -792,6 +811,8 @@ struct QemuFSM_::store_trace
 
             auto original_trace = pit->path();
 
+            // FIXME: xxx should be redundant, as the test case can be directly written by qemu
+            //            as a part of the trace
             fs::copy_file(vm_dir / hostfile_dir_name / input_args_name,
                           original_trace / "concrete_inputs.bin");
 
@@ -807,9 +828,11 @@ struct QemuFSM_::store_trace
             fs::rename(original_trace,
                        *trace);
 
+            *guest_data_post_exec = read_serialized_guest_data_post_exec((*trace) / CRETE_FILENAME_GUEST_DATA_POST_EXEC);
+
             fs::remove(trace_ready);
 
-        }, fsm.vm_dir_, fsm.trace_});
+        }, fsm.vm_dir_, fsm.trace_, fsm.guest_data_post_exec_});
     }
 };
 
@@ -827,19 +850,21 @@ struct QemuFSM_::connect_vm
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState& ts) -> void
     {
-        auto pid = fsm.child_->acquire()->get_id();
-
-        if(!process::is_running(pid))
-        {
-            BOOST_THROW_EXCEPTION(VMException{} << err::process_exited{"pid_"});
-        }
-
         ts.async_task_.reset(new AsyncTask{[](std::shared_ptr<Server> server,
                                               const fs::path vm_dir,
                                               const bool distributed,
                                               const std::string target,
+                                              std::shared_ptr<AtomicGuard<bp::child>> child,
                                               const fs::path test_target_archive)
         {
+            auto lock = child->acquire();
+            auto pid = lock->get_id();
+
+            if(!process::is_running(pid))
+            {
+                BOOST_THROW_EXCEPTION(VMException{} << err::process_exited{"pid_"});
+            }
+            
             auto new_port = server->port();
 
             std::cout << "new_port: " << new_port << std::endl;
@@ -925,6 +950,7 @@ struct QemuFSM_::connect_vm
         fsm.vm_dir_,
         fsm.dispatch_options_.mode.distributed,
         fsm.target_,
+        fsm.child_,
         fsm.test_target_archive_});
     }
 };

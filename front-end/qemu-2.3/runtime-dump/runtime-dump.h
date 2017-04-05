@@ -17,6 +17,8 @@ struct CreteFlags;
 
 /*****************************/
 /* Globals for QEMU c code */
+extern int f_crete_enabled;
+
 extern struct RuntimeEnv *runtime_env;
 extern struct CreteFlags *g_crete_flags;
 
@@ -24,16 +26,12 @@ extern struct TranslationBlock *rt_dump_tb;
 extern uint64_t rt_dump_tb_count;
 extern uint64_t nb_captured_llvm_tb;
 
+extern int f_crete_is_loading_code;
+
 extern int flag_rt_dump_enable;
-extern int flag_interested_tb;
-extern int flag_interested_tb_prev;
 
 // Enabled/Disabled on capture_begin/end. Can be disabled on command (e.g., crete_debug_capture()).
 extern int crete_flag_capture_enabled;
-
-extern int is_begin_capture;
-extern int is_target_pid;
-extern int is_user_code;
 
 extern uint64_t g_crete_target_pid;
 extern int g_custom_inst_emit;
@@ -45,6 +43,9 @@ extern int g_custom_inst_emit;
 #else
     #error CRETE: Only I386 and x64 supported!
 #endif // defined(TARGET_X86_64) || defined(TARGET_I386)
+
+// Manual code selection
+extern int helper_rdtsc_invoked;
 
 /*****************************/
 /* Functions for QEMU c code */
@@ -62,8 +63,14 @@ int  crete_post_cpu_tb_exec(void *qemuCpuState, TranslationBlock *tb,
 void dump_memo_sync_table_entry(struct RuntimeEnv *rt, uint64_t addr,
 		uint32_t size, uint64_t value);
 
-void add_qemu_interrupt_state(struct RuntimeEnv *rt,
-		int intno, int is_int, int error_code, int next_eip_addend);
+void crete_handle_raise_interrupt(void *env, int intno,
+        int is_int, int error_code, int next_eip_addend);
+void crete_handle_do_interrupt_all(void *qemuCPUState, int intno,
+        int is_int, int error_code, uint64_t next_eip, int is_hw);
+
+void clear_current_tb_br_taken(void);
+void add_current_tb_br_taken(int br_taken);
+uint64_t get_size_current_tb_br_taken(void);
 
 void crete_set_capture_enabled(struct CreteFlags *cf, int capture_enabled);
 int  crete_flags_is_true(struct CreteFlags *cf);
@@ -93,6 +100,9 @@ int  crete_flags_is_true(struct CreteFlags *cf);
 /***********************************/
 /* External interface for C++ code */
 #include "tcg-llvm-offline/tcg-llvm-offline.h"
+
+#include <crete/trace_tag.h>
+#include <crete/guest_data_post_exec.hpp>
 
 using namespace std;
 
@@ -201,6 +211,7 @@ typedef pair<QemuInterruptInfo, bool> interruptState_ty;
 //<name, concolic_memo>
 typedef map<string, CreteMemoInfo> creteConcolics_ty;
 
+
 class RuntimeEnv
 {
 private:
@@ -232,8 +243,31 @@ private:
     vector<MemoMergePoint_ty> m_debug_memoMergePoints;
 
     // Streaming tracing
+    bool m_streamed;        // Flag to indicate whether the trace have been streamed or not
+    bool m_pending_stream;  // Flag to indicate whether this is a pending stream
     uint64_t m_streamed_tb_count;
     uint64_t m_streamed_index;
+
+    // For skipping tracing interrupt handling code
+    pair<bool, uint64_t> m_interrupt_process_info; // (interrupt_started, ret_eip)
+
+    // trace tag for annotating test case
+    crete::creteTraceTag_ty m_trace_tag_explored;
+    crete::creteTraceTag_ty m_trace_tag_semi_explored;
+    crete::creteTraceTag_ty m_trace_tag_new;
+
+    uint64_t m_trace_tag_nodes_count;
+
+    // A tb can have multiple multiple conditional branch, including:
+    // 1. "repz": up to two branches
+    vector<bool> m_current_tb_br_taken;     // false: no taken; true: taken
+    // Every TB has a conditional branch for checking interrupt injected by qemu.
+    // This conditional br is not a part of the program logic and hence should be skipped
+    bool m_qemu_default_br_skipped;
+
+    // guest data accumulated while execution for dispatch to use
+    bool m_new_tb;
+    crete::GuestDataPostExec m_guest_data_post_exec;
 
     // crete miscs:
     // <name, concolic CreteMemoInfo>
@@ -258,6 +292,9 @@ private:
 
     // name, offset, size
     map<string, pair<uint64_t, uint64_t> > m_debug_cpuState_offsets;
+
+    //
+    void *m_dbg_cpuState_post_interest;
 
 public:
 	RuntimeEnv();
@@ -293,11 +330,27 @@ public:
     void addMemoSyncTableEntry(uint64_t addr, uint32_t size, uint64_t value);
     void addMemoMergePoint(MemoMergePoint_ty type_MMP);
 
+    // Stream tracing
+    void stream_writeRtEnvToFile(uint64_t tb_count);
+    void set_pending_stream();
+
+    // For skipping tracing on interrupt handling code
+    void set_interrupt_process_info(uint64_t ret_eip);
+    bool check_interrupt_process_info(uint64_t current_tb_pc);
+
+    // Trace tag
+    void add_current_tb_br_taken(int br_takend);
+    void clear_current_tb_br_taken();
+    uint64_t get_size_current_tb_br_taken();
+    void add_trace_tag(const TranslationBlock *tb, uint64_t tb_count);
+
+    // Guest data post execution
+    void add_new_tb_pc(const uint64_t current_tb_pc);
+
     //Misc
     void handlecreteMakeConcolic(string name, uint64_t guest_addr, uint64_t size);
 
     void writeRtEnvToFile();
-    void stream_writeRtEnvToFile(uint64_t tb_count);
     void verifyDumpData() const;
     void initOutputDirectory(const string& outputDirectory);
 
@@ -317,6 +370,9 @@ public:
     string get_tcoHelper_name(uint64_t) const;
 
     void init_debug_cpuState_offsets(const vector<pair<string, pair<uint64_t, uint64_t> > >& offsets);
+
+    void set_dbgCPUStatePostInterest(const void *cpuState);
+    void check_dbgCPUStatePostInterest(const void *cpuState);
 
 private:
     void init_concolics();
@@ -355,6 +411,12 @@ private:
     void writeInterruptStates() const;
 
     void writeTBGraphExecSequ();
+
+    // Trace tag
+    void print_trace_tag() const;
+
+    // Guest data post execution
+    void writeGuestDataPostExec();
 };
 
 class CreteFlags{

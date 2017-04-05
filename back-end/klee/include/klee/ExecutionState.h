@@ -24,7 +24,10 @@
 
 #if defined(CRETE_CONFIG)
 #include "klee/util/Assignment.h"
+
 #include "crete-replayer/qemu_rt_info.h"
+#include "crete/trace_tag.h"
+
 #include <deque>
 #endif //CRETE_CONFIG
 
@@ -166,6 +169,9 @@ public:
   bool crete_tb_tainted;
   bool crete_dbg_ta_fail;
 
+  // current tb_pc
+  uint64_t crete_current_tb_pc;
+
   void pushCreteConcolic(ConcolicVariable cv);
   ConcolicVariable getFirstConcolic();
   void printCreteConolic();
@@ -175,8 +181,20 @@ public:
 
   std::string crete_get_unique_name(const std::string name);
 
+  // trace tag
+  void check_trace_tag(bool &branch_taken, bool &explored_node);
+  crete::creteTraceTag_ty get_trace_tag_for_tc() const;
+
 private:
   std::deque<ConcolicVariable > creteConcolicsQueue;
+
+  // trace tag
+  uint64_t m_trace_tag_current_node_index;
+
+  bool m_current_node_explored;
+  vector<bool> m_current_node_br_taken;
+  vector<bool> m_current_node_br_taken_semi_explored;
+  uint64_t m_trace_tag_current_node_br_taken_index;
 
   // Debugging
 public:

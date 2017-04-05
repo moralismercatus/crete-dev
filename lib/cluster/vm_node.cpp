@@ -80,7 +80,8 @@ auto VMNode::poll() -> void
                         image_path(),
                         test_target_archive_path(),
                         false,
-                        target_
+                        target_,
+                        (traces().size() == 0)
             };
 
             vm->process_event(start_ev);
@@ -88,6 +89,7 @@ auto VMNode::poll() -> void
         else if(vm->is_flag_active<flag::trace_ready>())
         {
             push(vm->trace());
+            push_guest_data_post_exec(vm->get_guest_data_post_exec());
 
             vm->process_event(ev::trace_queued{});
         }        
@@ -147,7 +149,8 @@ auto VMNode::start_FSMs() -> void
         image_path(),
         test_target_archive_path(),
         false,
-        target_
+        target_,
+        (traces().size() == 0)
     };
 
     auto vm_num = 1u;
@@ -279,6 +282,20 @@ auto VMNode::reset_guest_data() -> void
     guest_data_ = boost::optional<GuestData>();
 }
 
+auto VMNode::push_guest_data_post_exec(const GuestDataPostExec& input) ->void
+{
+    guest_data_post_exec_.emplace_front(input);
+}
+
+auto VMNode::pop_guest_data_post_exec() -> const GuestDataPostExec
+{
+    assert(!guest_data_post_exec_.empty());
+    auto ret = guest_data_post_exec_.back();
+    guest_data_post_exec_.pop_back();
+
+    return ret;
+}
+
 auto process(AtomicGuard<VMNode>& node,
              NodeRequest& request) -> bool
 {
@@ -316,6 +333,13 @@ auto process(AtomicGuard<VMNode>& node,
 
         return true;
     }
+    case packet_type::cluster_request_guest_data_post_exec:
+    {
+        transmit_guest_data_post_exec(node,
+                                      request.client_);
+
+        return true;
+    }
     case packet_type::cluster_tx_test_target_archive:
     {
         receive_test_target_archive(node,
@@ -347,6 +371,22 @@ auto transmit_guest_data(AtomicGuard<VMNode>& node,
     write_serialized_binary(client,
                             pkinfo,
                             *guest_data);
+}
+
+auto transmit_guest_data_post_exec(AtomicGuard<VMNode>& node,
+                         Client& client) -> void
+{
+    auto lock = node.acquire();
+
+    auto pkinfo = PacketInfo{0, 0, 0};
+    pkinfo.id = lock->id();
+    pkinfo.type = packet_type::cluster_tx_guest_data_post_exec;
+
+    GuestDataPostExec guest_data_post_exec = lock->pop_guest_data_post_exec();
+
+    write_serialized_binary(client,
+                            pkinfo,
+                            guest_data_post_exec);
 }
 
 auto transmit_image_info(AtomicGuard<VMNode>& node,

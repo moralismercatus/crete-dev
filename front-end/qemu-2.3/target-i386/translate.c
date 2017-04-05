@@ -37,6 +37,7 @@
 #if defined(CRETE_CONFIG) || 1
 #include "../runtime-dump/custom-instructions.h"
 #include <crete/custom_opcode.h>
+#include "../runtime-dump/crete-debug.h"
 #endif //#if defined(CRETE_CONFIG)
 
 #define PREFIX_REPZ   0x01
@@ -1214,7 +1215,13 @@ static inline void gen_outs(DisasContext *s, TCGMemOp ot)
         gen_io_end();
     }
 }
-
+#if defined(CRETE_CONFIG) || 1
+#define CRETE_GEN_REPZ_END s->tb->last_opc = 0xFFFA
+#define CRETE_GEN_REPZ2_END s->tb->last_opc = 0xFFF9
+#else
+#define CRETE_GEN_REPZ_END
+#define CRETE_GEN_REPZ2_END
+#endif
 /* same method as Valgrind : we generate jumps to current or next
    instruction */
 #define GEN_REPZ(op)                                                          \
@@ -1231,6 +1238,7 @@ static inline void gen_repz_ ## op(DisasContext *s, TCGMemOp ot,              \
     if (s->repz_opt)                                                          \
         gen_op_jz_ecx(s->aflag, l2);                                          \
     gen_jmp(s, cur_eip);                                                      \
+    CRETE_GEN_REPZ_END;                                                       \
 }
 
 #define GEN_REPZ2(op)                                                         \
@@ -1249,6 +1257,7 @@ static inline void gen_repz_ ## op(DisasContext *s, TCGMemOp ot,              \
     if (s->repz_opt)                                                          \
         gen_op_jz_ecx(s->aflag, l2);                                          \
     gen_jmp(s, cur_eip);                                                      \
+    CRETE_GEN_REPZ2_END;                                                      \
 }
 
 GEN_REPZ(movs)
@@ -8382,12 +8391,26 @@ static inline void gen_intermediate_code_internal(X86CPU *cpu,
             break;
         }
         /* if too long translation, stop generation too */
-        if (tcg_op_buf_full() ||
+        if (tcg_op_buf_full() || crete_tcg_op_buf_full(caller_crete) ||
             (pc_ptr - pc_start) >= (TARGET_PAGE_SIZE - 32) ||
             num_insns >= max_insns) {
             gen_jmp_im(pc_ptr - dc->cs_base);
 
 #if defined(CRETE_CONFIG) && defined(INST_BASED_CALL_STACK) || 1
+            CRETE_DBG_GEN(
+            if(is_in_list_crete_dbg_tb_pc(tb->pc))
+            {
+                fprintf(stderr, "[tb-translate] Too long TB: start at %p, end at %p. (caller_crete = %d)\n",
+                        (void *)(uint64_t)tb->pc, (void *)(uint64_t)pc_ptr, caller_crete);
+                fprintf(stderr, "tcg_op_buf_full(): %d, \n"
+                        "((pc_ptr - pc_start) >= (TARGET_PAGE_SIZE - 32)): %d\n"
+                        "num_insns >= max_insns: %d\n",
+                        (int)tcg_op_buf_full(),
+                        (int)((pc_ptr - pc_start) >= (TARGET_PAGE_SIZE - 32)),
+                        (int)(num_insns >= max_insns));
+            }
+            );
+
             gen_eob(dc, 0xFFFC);
 #else
             gen_eob(dc);
