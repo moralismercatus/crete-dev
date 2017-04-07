@@ -33,6 +33,7 @@ const auto dispatch_log_test_case_tree_file_name = std::string{"test_case_tree.l
 const auto dispatch_log_vm_dir_name = std::string{"vm"};
 const auto dispatch_log_svm_dir_name = std::string{"svm"};
 const auto dispatch_node_error_log_file_name = std::string{"node_error.log"};
+const auto dispatch_target_execution_log_file_name = std::string{"target_execution.log"};
 const auto dispatch_last_root_symlink = std::string{"last"};
 const auto vm_test_multiplier = 1u;
 const auto vm_trace_multiplier = 20u;

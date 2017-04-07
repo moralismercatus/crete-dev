@@ -138,6 +138,7 @@ public:
     auto pwd() -> const fs::path&;
     auto guest_data() -> const GuestData&;
     auto get_guest_data_post_exec() -> const GuestDataPostExec&;
+    auto target_execution_log() -> const std::string&;
     auto initial_test() -> const TestCase&;
     auto error() -> const log::NodeError&;
 
@@ -284,6 +285,7 @@ private:
     std::string target_;
     crete::log::Logger exception_log_;
     log::NodeError error_log_;
+    std::string target_execution_log_;
 
     std::shared_ptr<GuestDataPostExec> guest_data_post_exec_{std::make_shared<GuestDataPostExec>()};
 
@@ -378,6 +380,12 @@ inline
 auto QemuFSM_:: get_guest_data_post_exec() -> const GuestDataPostExec&
 {
     return *guest_data_post_exec_;
+}
+
+inline
+auto QemuFSM_::target_execution_log() -> const std::string&
+{
+    return target_execution_log_;
 }
 
 inline
@@ -977,9 +985,18 @@ struct QemuFSM_::receive_guest_info
 struct QemuFSM_::finish
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
-    auto operator()(EVT const&, FSM&, SourceState&, TargetState&) -> void
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> void
     {
-        // TODO: anything to do here?
+        try // TODO: this ought to be an AsyncTask
+        {
+            read_serialized_text(*fsm.server_,
+                                 fsm.target_execution_log_,
+                                 packet_type::cluster_tx_target_execution_log);
+        }
+        catch(std::exception& e)
+        {
+            BOOST_THROW_EXCEPTION(VMException{} << err::msg{boost::diagnostic_information(e)});
+        }
     }
 };
 

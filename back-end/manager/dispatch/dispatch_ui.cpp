@@ -175,7 +175,24 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
                 BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{p.string()});
             }
 
-            return read_serialized(ifs);
+            try
+            {
+                return read_serialized( ifs );
+            }
+            catch( Exception& e )
+            {
+                (void)e; // Serialized read failed, so try normal read.
+
+                ifs.close();
+
+                fs::ifstream ifs2( p
+                                 , std::ios::in | std::ios::binary);
+
+                CRETE_EXCEPTION_ASSERT( ifs2.good()
+                                      , err::file_open_failed{ p.string() } );
+
+                return read_test_case( ifs2 );
+            }
         }();
 
         if(opts.mode.distributed)

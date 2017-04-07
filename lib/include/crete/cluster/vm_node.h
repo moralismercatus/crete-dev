@@ -34,6 +34,7 @@ class CRETE_DLL_EXPORT VMNode : public Node
 public:
     using VM = std::shared_ptr<node::vm::fsm::QemuFSM>; // TODO: should be unique_ptr, shouldn't it?
     using VMs = std::vector<VM>;
+    using TargetExecLogs = std::deque<std::string>;
 
 public:
     VMNode(const node::option::VMNode& node_options,
@@ -58,6 +59,9 @@ public:
     auto push_guest_data_post_exec(const GuestDataPostExec& input) ->void;
     auto pop_guest_data_post_exec() -> const GuestDataPostExec;
 
+    auto push_target_execution_log(const std::string& log) -> void;
+    auto pop_target_execution_log() -> std::string;
+
     auto poll() -> void;
 
 private:
@@ -68,6 +72,7 @@ private:
     std::string target_;
     boost::optional<GuestData> guest_data_;
     GuestDataPostExecQueue guest_data_post_exec_;
+    TargetExecLogs target_execution_logs_;
 };
 
 auto process(AtomicGuard<VMNode>& node,
@@ -86,6 +91,8 @@ auto receive_target(AtomicGuard<VMNode>& node,
                     boost::asio::streambuf& sbuf) -> void;
 auto receive_test_target_archive(AtomicGuard<VMNode>& node,
                                  Client& client) -> void;
+auto transmit_target_execution_log( AtomicGuard<VMNode>& node
+                                  , Client& client ) -> void;
 
 } // namespace cluster
 } // namespace crete

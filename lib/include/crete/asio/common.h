@@ -75,6 +75,8 @@ const uint32_t cluster_tx_guest_data = 30;
 const uint32_t cluster_request_guest_data_post_exec = 31;
 const uint32_t cluster_tx_guest_data_post_exec = 32;
 const uint32_t cluster_tx_test_target_archive = 33;
+const uint32_t cluster_tx_target_execution_log = 34;
+const uint32_t cluster_request_target_execution_log = 35;
 }
 
 struct PacketInfo

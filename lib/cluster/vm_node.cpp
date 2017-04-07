@@ -90,6 +90,7 @@ auto VMNode::poll() -> void
         {
             push(vm->trace());
             push_guest_data_post_exec(vm->get_guest_data_post_exec());
+            push_target_execution_log(vm->target_execution_log());
 
             vm->process_event(ev::trace_queued{});
         }        
@@ -296,6 +297,21 @@ auto VMNode::pop_guest_data_post_exec() -> const GuestDataPostExec
     return ret;
 }
 
+auto VMNode::push_target_execution_log(const std::string& log) -> void
+{
+    target_execution_logs_.emplace_front(log);
+}
+
+auto VMNode::pop_target_execution_log() -> std::string
+{
+    assert(!target_execution_logs_.empty()); // TODO: this should be an exception.
+
+    auto ret = target_execution_logs_.back();
+    target_execution_logs_.pop_back();
+
+    return ret;
+}
+
 auto process(AtomicGuard<VMNode>& node,
              NodeRequest& request) -> bool
 {
@@ -344,6 +360,13 @@ auto process(AtomicGuard<VMNode>& node,
     {
         receive_test_target_archive(node,
                                     request.client_);
+
+        return true;
+    }
+    case packet_type::cluster_request_target_execution_log:
+    {
+        transmit_target_execution_log( node,
+                                       request.client_ );
 
         return true;
     }
@@ -480,6 +503,26 @@ auto receive_test_target_archive(AtomicGuard<VMNode>& node,
 
     read(client,
          ofs);
+}
+
+auto transmit_target_execution_log( AtomicGuard<VMNode>& node
+                                  , Client& client ) -> void
+{
+    auto pkinfo = PacketInfo{0,0,0};
+    auto exec_log = std::string{};
+
+    {
+        auto lock = node.acquire();
+
+        pkinfo.id = lock->id();
+        pkinfo.type = packet_type::cluster_tx_target_execution_log;
+
+        exec_log = lock->pop_target_execution_log();
+    }
+
+    write_serialized_binary( client,
+                             pkinfo,
+                             exec_log );
 }
 
 auto VMNode::add_instance() -> void

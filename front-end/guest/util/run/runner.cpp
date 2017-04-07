@@ -24,6 +24,8 @@
 #include <unistd.h>
 #include <sys/mount.h>
 
+#include <sstream>
+
 namespace bp = boost::process;
 namespace fs = boost::filesystem;
 namespace msm = boost::msm;
@@ -82,6 +84,8 @@ private:
 
     bool is_first_exec_;
     std::size_t proc_maps_hash_;
+
+    std::string execution_log_;
 
 public:
     RunnerFSM_();
@@ -682,11 +686,11 @@ static inline void process_exit_status(std::ostream& log, int exit_status)
         {
             log << "Replay Timeout\n";
         } else {
-            log << "[Signal Caught] signum = " << signum << ", signame: " << strsignal(signum) << std::endl;
+            log << "[Signal Caught] signum = " << signum << ", signame: " << strsignal(signum) << '\n';
         }
     }
 
-    log << "ABNORMAL EXIT STATUS: " << exit_status << std::endl;
+    log << "ABNORMAL EXIT STATUS: " << exit_status << '\n';
 }
 
 void RunnerFSM_::launch_executable()
@@ -713,16 +717,25 @@ void RunnerFSM_::launch_executable()
 
     std::cerr << "=== Output from the target executable ===\n";
     bp::pistream& is = proc.get_stdout();
+    std::stringstream ss;
     std::string line;
+
     while(std::getline(is, line))
     {
-        std::cerr << line << std::endl;
+        ss << line << '\n';
     }
+
     bp::status s = proc.wait();
     alarm(0);
 
-    process_exit_status(std::cerr, s.exit_status());
-    std::cerr << "=========================================\n";
+    process_exit_status(ss, s.exit_status());
+    ss << "=========================================\n";
+
+    const std::string& text_output = ss.str();
+
+    std::cerr << text_output << std::endl;
+
+    execution_log_ = text_output;
 #endif
 }
 
@@ -1025,6 +1038,14 @@ void RunnerFSM_::finished(const poll&)
     signal_dump();
 
     pid_ = -1;
+
+    PacketInfo pk;
+    pk.id = 0; // TODO: Don't care? Maybe. What about a custom instruction that reads the VM's pid as an ID, to be checked both for sanity and to give the instance a way to check whether the VM is still running.
+    pk.size = 0; // Don't care. Set by write_serialized_text.
+    pk.type = packet_type::cluster_tx_target_execution_log;
+    write_serialized_text(*client_,
+                          pk,
+                          execution_log_);
 }
 
 void RunnerFSM_::verify_invariants(const poll&)

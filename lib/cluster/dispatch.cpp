@@ -39,6 +39,7 @@ auto sort_by_trace(NodeRegistrar::Nodes& nodes) -> void;
 auto sort_by_test(NodeRegistrar::Nodes& nodes) -> void;
 auto receive_trace(NodeRegistrar::Node& node,
                    const boost::filesystem::path& traces_dir) -> boost::filesystem::path;
+auto receive_target_execution_log( NodeRegistrar::Node& node ) -> std::string;
 auto receive_tests(NodeRegistrar::Node& node) -> std::vector<TestCase>;
 auto receive_errors(NodeRegistrar::Node& node) -> std::vector<log::NodeError>;
 auto receive_image_info(NodeRegistrar::Node& node) -> ImageInfo;
@@ -105,6 +106,7 @@ public:
     auto pop_error() -> log::NodeError;
     auto guest_data() const -> const GuestData&;
     auto get_guest_data_post_exec() const -> const GuestDataPostExec&;
+    auto get_target_execution_log() const -> const std::string&;
 
     // +--------------------------------------------------+
     // + Entry & Exit                                     +
@@ -149,6 +151,7 @@ public:
     struct commence;
     struct rx_status;
     struct rx_trace;
+    struct rx_exec_log;
     struct tx_test;
     struct rx_error;
 
@@ -239,6 +242,7 @@ private:
     fs::path traces_dir_;
     std::shared_ptr<fs::path> trace_ = std::make_shared<fs::path>();
     std::shared_ptr<GuestDataPostExec> guest_data_post_exec_ = std::make_shared<GuestDataPostExec>();
+    std::shared_ptr<std::string> target_execution_log_ = std::make_shared<std::string>();
     std::deque<log::NodeError> errors_;
     boost::optional<ImageInfo> image_info_;
     bool update_image_{false};
@@ -313,6 +317,11 @@ auto VMNodeFSM_::get_trace() const -> const fs::path&
 auto VMNodeFSM_::get_guest_data_post_exec() const -> const GuestDataPostExec&
 {
     return *guest_data_post_exec_;
+}
+
+auto VMNodeFSM_::get_target_execution_log() const -> const std::string&
+{
+    return *target_execution_log_;
 }
 
 auto VMNodeFSM_::errors() const -> const std::deque<log::NodeError>&
@@ -675,27 +684,33 @@ struct VMNodeFSM_::rx_trace
         ts.async_task_.reset(new AsyncTask{[]( NodeRegistrar::Node node
                                              , const fs::path traces_dir
                                              , std::shared_ptr<fs::path> trace
-                                             , std::shared_ptr<GuestDataPostExec> guest_data_post_exec)
+                                             , std::shared_ptr<GuestDataPostExec> guest_data_post_exec
+                                             , std::shared_ptr<std::string> target_execution_log )
         {
             *trace = receive_trace(node,
                                   traces_dir);
 
-            // Read guest_data_post_exec_ from vm-node
-            auto lock = node->acquire();
+            {
+                // Read guest_data_post_exec_ from vm-node
+                auto lock = node->acquire();
 
-            auto pkinfo = PacketInfo{0,0,0};
-            pkinfo.id = lock->status.id;
-            pkinfo.type = packet_type::cluster_request_guest_data_post_exec;
-            lock->server.write(pkinfo);
+                auto pkinfo = PacketInfo{0,0,0};
+                pkinfo.id = lock->status.id;
+                pkinfo.type = packet_type::cluster_request_guest_data_post_exec;
+                lock->server.write(pkinfo);
 
-            read_serialized_binary(lock->server,
-                                   *guest_data_post_exec,
-                                   packet_type::cluster_tx_guest_data_post_exec);
+                read_serialized_binary(lock->server,
+                           *guest_data_post_exec,
+                           packet_type::cluster_tx_guest_data_post_exec);
+            }
+
+            *target_execution_log = receive_target_execution_log(node);
         }
         , fsm.node_
         , fsm.traces_dir_
         , fsm.trace_
-        , fsm.guest_data_post_exec_});
+        , fsm.guest_data_post_exec_
+        , fsm.target_execution_log_ });
     }
 };
 
@@ -1326,6 +1341,7 @@ private:
     Port master_port_;
     crete::log::Logger exception_log_;
     crete::log::Logger node_error_log_;
+    fs::ofstream target_execution_log_; // TODO: I'd like this to use Logger, but haven't figured out why they all direct to same buffer.
 
     std::chrono::time_point<std::chrono::system_clock> start_time_ = std::chrono::system_clock::now();
     bool first_{true};
@@ -1483,15 +1499,25 @@ struct DispatchFSM_::init
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
     {
-        fsm.exception_log_.add_sink(fsm.root_ / log_dir_name / exception_log_file_name);
-        fsm.exception_log_.auto_flush(true);
-        fsm.node_error_log_.add_sink(fsm.root_ / log_dir_name / dispatch_node_error_log_file_name);
-        fsm.node_error_log_.auto_flush(true);
-
         fsm.master_port_ = ev.master_port_;
         fsm.options_ = ev.options_;
         fsm.next_target_queue_ = std::deque<std::string>{fsm.options_.test.items.begin(),
                                                          fsm.options_.test.items.end()};
+
+//        if(!fsm.options_.mode.distributed) // TODO: should be encoded into FSM.
+        {
+            fsm.set_up_root_dir();
+        }
+
+        fsm.exception_log_.add_sink(fsm.root_ / log_dir_name / exception_log_file_name);
+        fsm.exception_log_.auto_flush(true);
+        fsm.node_error_log_.add_sink(fsm.root_ / log_dir_name / dispatch_node_error_log_file_name);
+        fsm.node_error_log_.auto_flush(true);
+        fsm.target_execution_log_.open(fsm.root_ / log_dir_name / dispatch_log_vm_dir_name / dispatch_target_execution_log_file_name);
+
+        CRETE_EXCEPTION_ASSERT( fsm.target_execution_log_.good()
+                              , err::file_open_failed{ dispatch_target_execution_log_file_name } );
+
         if(!fsm.options_.test.seeds.empty()) {
             fsm.next_target_seeds_queue_ = std::deque<std::string>{fsm.options_.test.seeds.begin(),
                 fsm.options_.test.seeds.end()};
@@ -1502,11 +1528,6 @@ struct DispatchFSM_::init
         fsm.trace_pool_ = TracePool{fsm.options_};
 
         fsm.launch_node_registrar(fsm.master_port_);
-
-        if(!fsm.options_.mode.distributed) // TODO: should be encoded into FSM.
-        {
-            fsm.set_up_root_dir();
-        }
     }
 };
 
@@ -1606,6 +1627,8 @@ struct DispatchFSM_::dispatch
                     {
                         fsm.to_trace_pool(nfsm->get_trace());
                         fsm.set_update_time_last_new_tb(nfsm->get_guest_data_post_exec());
+                        fsm.target_execution_log_ << nfsm->get_target_execution_log() << std::endl;
+            std::cerr << "exec_log: " << nfsm->get_target_execution_log() << std::endl;
                     }
                 }
                 else if(nfsm->is_flag_active<vm::flag::tx_test>())
@@ -1783,6 +1806,7 @@ struct DispatchFSM_::next_target_clean
     {
         // No need to store expensive traces once we're done testing.
         fs::remove_all(fsm.root_ / dispatch_trace_dir_name);
+        fs::create_directories(fsm.root_ / dispatch_trace_dir_name);
     }
 };
 
@@ -2382,6 +2406,23 @@ auto receive_trace(NodeRegistrar::Node& node,
 //    restore_directory(trace);
 
     return trace;
+}
+
+auto receive_target_execution_log( NodeRegistrar::Node& node ) -> std::string
+{
+    auto lock = node->acquire();
+
+    auto pkinfo = PacketInfo{0,0,0};
+    pkinfo.id = lock->status.id;
+    pkinfo.type = packet_type::cluster_request_target_execution_log;
+    lock->server.write(pkinfo);
+    auto exec_log = std::string{};
+
+    read_serialized_binary( lock->server,
+                            exec_log,
+                            packet_type::cluster_tx_target_execution_log );
+
+    return exec_log;
 }
 
 auto receive_tests(NodeRegistrar::Node& node) -> std::vector<TestCase>
