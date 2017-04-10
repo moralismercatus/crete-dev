@@ -12,6 +12,10 @@
 
 #include <boost/thread.hpp>
 #include <boost/filesystem/fstream.hpp>
+#include <boost/move/unique_ptr.hpp>
+#include <boost/move/make_unique.hpp>
+
+//#include <iostream>
 
 namespace crete
 {
@@ -34,6 +38,7 @@ public:
 
 private:
     AtomicGuard<Node>& node_;
+    boost::movelib::unique_ptr<AtomicGuard<bool>> transmission_pending_; // Had to make a ptr for some other reason.
     ID node_id_;
     IPAddress master_ip_address_;
     Port master_port_;
@@ -64,6 +69,7 @@ NodeDriver<Node>::NodeDriver(const IPAddress& master_ipa,
                              const Port& master_port,
                              AtomicGuard<Node>& node) :
     node_(node),
+    transmission_pending_(boost::movelib::make_unique<AtomicGuard<bool>>(false)),
     node_id_(node_.acquire()->id()),
     master_ip_address_(master_ipa),
     master_port_(master_port)
@@ -106,6 +112,11 @@ auto NodeDriver<Node>::run_node(AsyncTask& async_task) -> void
 
         try
         {
+            while(transmission_pending_->acquire())
+            {
+                // Wait until transmission has finished, so as to avoid contention for node_.
+            }
+
             node_.acquire()->run();
         }
         catch(boost::exception& e)
@@ -138,6 +149,8 @@ auto NodeDriver<Node>::run_listener() -> void
         boost::asio::streambuf sbuf;
         auto pkinfo = client.read(sbuf);
 
+        transmission_pending_->acquire() = true;
+
         if(pkinfo.id != node_id_)
         {
             BOOST_THROW_EXCEPTION(Exception{} << err::network_type_mismatch{pkinfo.id}
@@ -156,6 +169,8 @@ auto NodeDriver<Node>::run_listener() -> void
             shutdown_ = process_default(node_,
                                         request);
         }
+
+        transmission_pending_->acquire() = false;
     }
 }
 

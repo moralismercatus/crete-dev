@@ -1,6 +1,7 @@
 #ifndef CRETE_HOST_CRETE_H
 #define CRETE_HOST_CRETE_H
 
+#include <stdint.h>
 #include <crete/custom_opcode.h>
 
 typedef UINT64 size_t;
@@ -109,6 +110,31 @@ void crete_dump(void)
     __asm__ __volatile__(
             CRETE_INSTR_DUMP()
     );
+}
+
+static inline
+void crete_insert_instr_read_port(void* addr, size_t size)
+{
+//    __crete_touch_buffer((void *)addr, size);
+
+    __asm__ __volatile__(
+        CRETE_INSTR_READ_PORT()
+        : : "a" (addr), "c" (size)
+    );
+}
+
+static inline
+void crete_pause_for_savevm(void)
+{
+    // Utilize read_port for the purpose of pausing the program until
+    // the user has saved a snapshot, and send it off to crete-dispatch.
+    unsigned short port = 0;
+    do
+    {
+        crete_insert_instr_read_port((void*)&port,
+                                     (size_t)sizeof(port));
+
+    }while(port == 0);
 }
 
 #endif // CRETE_HOST_CRETE_H

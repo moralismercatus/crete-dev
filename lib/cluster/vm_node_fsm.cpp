@@ -51,6 +51,13 @@ namespace vm
 // + Exceptions                                       +
 // +--------------------------------------------------+
 struct VMException : public Exception {};
+struct VMTimeoutException : public VMException
+{
+    VMTimeoutException(const std::string& log)
+        : serial_log{log} {}
+
+    std::string serial_log; // TODO: this isn't generic; ovmf_mode only. Timeouts should be usable in app_mode as well.
+};
 
 // +--------------------------------------------------+
 // + Events                                           +
@@ -136,6 +143,7 @@ public:
     auto get_guest_data_post_exec() -> const GuestDataPostExec&;
     auto initial_test() -> const TestCase&;
     auto error() -> const log::NodeError&;
+    auto elapsed_time() -> uint64_t;
 
     // +--------------------------------------------------+
     // + Entry & Exit                                     +
@@ -188,6 +196,7 @@ public:
     struct receive_guest_info;
     struct finish;
     struct terminate;
+    struct notify_expired;
 
     // +--------------------------------------------------+
     // + Gaurds                                           +
@@ -196,6 +205,7 @@ public:
     struct is_image_valid;
     struct is_first_vm;
     struct is_finished;
+    struct is_target_expired;
     struct is_distributed;
     struct is_app_mode; // Mutually exclusive with is_ovmf_mode.
     struct is_ovmf_mode; // Mutually exclusive with is_app_mode.
@@ -272,10 +282,15 @@ public:
                                                                                              ,And_<is_finished
                                                                                                   ,is_app_mode>> >,
       Row<Testing           ,ev::poll          ,StoreTrace        ,ActionSequence_<mpl::vector<
+                                                                       terminate,
+                                                                       notify_expired>>      ,And_<is_prev_task_finished
+                                                                                             ,And_<is_ovmf_mode
+                                                                                                  ,is_target_expired>> >,
+      Row<Testing           ,ev::poll          ,StoreTrace        ,ActionSequence_<mpl::vector<
                                                                        store_trace,
                                                                        terminate>>      ,And_<is_prev_task_finished
-                                                                                             ,And_<is_finished
-                                                                                                  ,is_ovmf_mode>> >,
+                                                                                             ,And_<is_ovmf_mode
+                                                                                                  ,is_finished>> >,
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<StoreTrace        ,ev::poll          ,Finished          ,none                 ,is_prev_task_finished>,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -296,7 +311,10 @@ private:
     fs::path new_image_path_;
     boost::thread image_updater_thread_;
     std::shared_ptr<fs::path> trace_{std::make_shared<fs::path>()}; // To be read when is_flag_active<trace_ready>() == true.
-    std::shared_ptr<AtomicGuard<bp::child>> child_{std::make_shared<AtomicGuard<bp::child>>(-1, bp::detail::file_handle(), bp::detail::file_handle(), bp::detail::file_handle())};
+    std::shared_ptr<AtomicGuard<bp::child>> child_{std::make_shared<AtomicGuard<bp::child>>( -1
+                                                                                           , bp::detail::file_handle()
+                                                                                           , bp::detail::file_handle()
+                                                                                           , bp::detail::file_handle())};
     std::shared_ptr<Server> server_{std::make_shared<Server>()}; // Ctor acquires unique port.
     bool first_vm_{false};
     GuestData guest_data_;
@@ -305,6 +323,8 @@ private:
     std::string target_;
     crete::log::Logger exception_log_;
     log::NodeError error_log_;
+    std::chrono::time_point<std::chrono::system_clock> start_time_; // TODO: identical to DispatchFSM. Abstract into utility class.
+    uint64_t tc_timeout_duration_{30};
 
     std::shared_ptr<GuestDataPostExec> guest_data_post_exec_{std::make_shared<GuestDataPostExec>()};
 
@@ -359,11 +379,20 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
         ss << child_->acquire()->get_stdout().rdbuf();
     }
 
+    if(dynamic_cast<VMTimeoutException*>(&e))
+    {
+        auto etimeout = dynamic_cast<VMTimeoutException*>(&e);
+
+        ss << "Serial log:\n"
+           << etimeout->serial_log << '\n';
+    }
+
     error_log_.log = ss.str();
 
     if(dynamic_cast<VMException*>(&e))
     {
         std::cerr << "VMException thrown.\n";
+
         fsm.process_event(ev::error{});
     }
     else
@@ -437,49 +466,69 @@ auto QemuFSM_::error() -> const log::NodeError&
     return error_log_;
 }
 
+inline
+auto QemuFSM_::elapsed_time() -> uint64_t
+{
+    using namespace std::chrono;
+
+    auto current_time = system_clock::now();
+
+    return duration_cast<seconds>(current_time - start_time_).count();
+}
+
 // +--------------------------------------------------+
 // + States                                           +
 // +--------------------------------------------------+
 struct QemuFSM_::Start : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Start" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Start" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::ValidateImage : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: ValidateImage" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: ValidateImage" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::UpdateImage : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: UpdateImage" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: UpdateImage" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::StartVM : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: StartVM" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: StartVM" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::RxGuestData : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: RxGuestData" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: RxGuestData" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -487,37 +536,45 @@ struct QemuFSM_::GuestDataRxed : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::guest_data_rxed>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: GuestDataRxed" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: GuestDataRxed" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::NextTest : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::next_test>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: NextTest" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: NextTest" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::Testing : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Testing" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Testing" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
 struct QemuFSM_::StoreTrace : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: StoreTrace" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: StoreTrace" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -525,51 +582,63 @@ struct QemuFSM_::Finished : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::trace_ready>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Finished" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Finished" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::ConnectVM : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: ConnectVM" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: ConnectVM" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::Active : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Active" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Active" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::Terminated : public msm::front::terminate_state<>
 {
     using flag_list = mpl::vector1<flag::terminated>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Terminated" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Terminated" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::Valid : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Valid" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Valid" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::Error : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::error>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Error" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Error" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 // +--------------------------------------------------+
 // + Actions                                          +
@@ -725,10 +794,9 @@ struct QemuFSM_::start_vm
                 BOOST_THROW_EXCEPTION(Exception{} << err::file_missing{exe});
             }
 
-            auto args = std::vector<std::string>{fs::absolute(exe).string() // It appears our modified QEMU requires full path in argv[0]...
-                                ,"-hda"
-                                ,image_name
-                                };
+            auto args = std::vector<std::string>{ fs::absolute(exe).string() // It appears our modified QEMU requires full path in argv[0]...
+                                                , "-hda"
+                                                , image_name };
 
             if(dispatch_options.vm.mode == cluster::option::VM::Mode::app)
             {
@@ -737,6 +805,31 @@ struct QemuFSM_::start_vm
 
                 args.insert(args.end()
                            ,{"-loadvm", dispatch_options.vm.snapshot});
+            }
+            else if(dispatch_options.vm.mode == cluster::option::VM::Mode::ovmf)
+            {
+                args.insert( args.end()
+                           , { "-loadvm", "test"
+                             , "-debugcon", "file:" + ovmf_serial_log_file_name
+                             , "-global", "isa-debugcon.iobase=0x402" } );
+
+                if(!fs::exists(vm_dir / "hostfile"))
+                {
+                    fs::create_directory(vm_dir / "hostfile");
+                }
+
+                fs::ofstream ofs(vm_dir / "hostfile" / "port");
+
+                if(!ofs.good())
+                {
+                    assert(0 && "can't write to port");
+                }
+
+                ofs << 1;
+            }
+            else
+            {
+                CRETE_EXCEPTION_THROW(err::mode{ "mode is neither ovmf nor app" });
             }
 
             auto add_args = std::vector<std::string>{};
@@ -776,6 +869,8 @@ struct QemuFSM_::prepare_test
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState& ts) -> void
     {
+        fsm.start_time_ = std::chrono::system_clock::now();
+
         ts.async_task_.reset(new AsyncTask{[](const fs::path vm_dir
                                              ,const TestCase tc)
         {
@@ -801,6 +896,7 @@ struct QemuFSM_::prepare_test
             }
 
             write_serialized(ofs, tc);
+
         }, fsm.vm_dir_, ev.tc_});
     }
 };
@@ -1032,6 +1128,47 @@ struct QemuFSM_::terminate
     }
 };
 
+struct QemuFSM_::notify_expired
+{
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> void
+    {
+        static auto error_id = 1u;
+
+        auto error_dir = fsm.vm_dir_ / "error";
+        auto this_error_dir = error_dir / std::to_string(error_id++);
+        auto hostfile_dir = fsm.vm_dir_ / hostfile_dir_name;
+        auto serial_log_path = fsm.vm_dir_ / ovmf_serial_log_file_name;
+
+        if( !fs::exists( this_error_dir ) )
+        {
+            fs::create_directories( this_error_dir );
+        }
+
+        // TODO: if we have a GUID for TCs, we don't actually need this whole copying TC/debug info mechanism. Just pass info on to Dispatch.
+        fs::copy_file( hostfile_dir / "input_arguments.bin"
+                     , this_error_dir / "input_arguments.bin"
+                     , fs::copy_option::overwrite_if_exists ); // TODO: rather, we should clean the whole error dir each test, so as to not confuse with previous ones.
+        fs::copy_file( serial_log_path
+                     , this_error_dir / ovmf_serial_log_file_name
+                     , fs::copy_option::overwrite_if_exists ); // TODO: rather, we should clean the whole error dir each test, so as to not confuse with previous ones.
+
+        CRETE_EXCEPTION_ASSERT_X( fs::file_size( serial_log_path ) < max_file_size
+                                , VMTimeoutException{ "Serial log too large to copy" }
+                                , err::msg{ "Test did not complete within expected duration." } );
+
+        fs::ifstream ifs( serial_log_path
+                        , ios::binary | ios::in );
+
+        CRETE_EXCEPTION_ASSERT( ifs.good()
+                              , err::file_open_failed{ serial_log_path.string() } );
+
+        CRETE_EXCEPTION_THROW_X( (VMTimeoutException{ std::string{ std::istreambuf_iterator<char>{ ifs }
+                                                                 , std::istreambuf_iterator<char>{} } })
+                               , err::msg{ "Test did not complete within expected duration." } );
+    }
+};
+
 // +--------------------------------------------------+
 // + Guards                                           +
 // +--------------------------------------------------+
@@ -1083,6 +1220,22 @@ struct QemuFSM_::is_finished
         auto trace_ready_sig = fsm.vm_dir_ / hostfile_dir_name / trace_ready_name;
 
         return fs::exists(trace_ready_sig);
+    }
+};
+
+struct QemuFSM_::is_target_expired
+{
+    template <class EVT,class FSM,class SourceState,class TargetState>
+    auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
+    {
+        auto pid = fsm.child_->acquire()->get_id();
+
+        if(!process::is_running(pid)) // TODO: this covers the case where the VM died, but what about crete-run?
+        {
+            BOOST_THROW_EXCEPTION(VMException{} << err::process_exited{"pid_"});
+        }
+
+        return fsm.elapsed_time() > fsm.tc_timeout_duration_;
     }
 };
 

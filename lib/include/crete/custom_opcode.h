@@ -102,4 +102,22 @@
 #define CRETE_INSTR_SEND_CONCOLIC_NAME_VALUE 0x200000
 #define CRETE_INSTR_SEND_CONCOLIC_NAME() CRETE_INSTR_GENERATE(00, 20)
 
+#define CRETE_INSTR_OVMF_FW_FUNCTION_VALUE 0x210000
+#define CRETE_INSTR_OVMF_FW_FUNCTION() CRETE_INSTR_GENERATE(00, 21)
+
+struct crete_ovmf_fw_fn_package
+{
+    uint64_t fn_id;
+    uint64_t arg1, arg2, arg3, arg4;
+    uint64_t arg1_size, arg2_size, arg3_size, arg4_size;
+};
+
+enum crete_ovmf_fn_ids
+{
+    CRETE_OVMF_FN_open = 0,
+    CRETE_OVMF_FN_fdopen,
+    CRETE_OVMF_FN_fwrite,
+    CRETE_OVMF_FN_fclose
+};
+
 #endif // CRETE_CUSTOM_OPCODE_H

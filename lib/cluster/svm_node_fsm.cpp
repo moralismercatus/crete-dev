@@ -327,28 +327,34 @@ auto KleeFSM_::error() -> const log::NodeError&
 // +--------------------------------------------------+
 struct KleeFSM_::Start : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Start" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Start" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::NextTrace : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::next_trace>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: NextTrace" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: NextTrace" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::Prepare : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::active>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Prepare" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Prepare" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -356,10 +362,12 @@ struct KleeFSM_::ExecuteSymbolic : public msm::front::state<>
 {
     using flag_list = mpl::vector2<flag::active, flag::active_async_task>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: ExecuteSymbolic" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: ExecuteSymbolic" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -367,28 +375,34 @@ struct KleeFSM_::StoreTests : public msm::front::state<>
 {
     using flag_list = mpl::vector2<flag::active, flag::active_async_task>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: StoreTests" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: StoreTests" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
 struct KleeFSM_::Terminated2: public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Terminated2" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Terminated2" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::Finished : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::active>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Finished" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Finished" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -396,42 +410,52 @@ struct KleeFSM_::ResultReady : public msm::front::state<>
 {
     using flag_list = mpl::vector2<flag::tests_ready, flag::active>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: ResultReady" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: ResultReady" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::Active : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Active" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Active" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::Terminated : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::terminated>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Terminated" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Terminated" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::Valid : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Valid" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Valid" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct KleeFSM_::Error : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::error>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cerr << "entering: Error" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cerr << "leaving: Error" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 
 // +--------------------------------------------------+

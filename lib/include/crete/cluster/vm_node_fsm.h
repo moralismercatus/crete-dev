@@ -20,6 +20,8 @@ namespace node
 namespace vm
 {
 
+const auto ovmf_serial_log_file_name = std::string{ "ovmf_serial.log" };
+
 // +--------------------------------------------------+
 // + Flags                                            +
 // +--------------------------------------------------+
