@@ -168,7 +168,7 @@ struct Trace
 
 struct Report
 {
-    bool status;
+    bool status{true};
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version)

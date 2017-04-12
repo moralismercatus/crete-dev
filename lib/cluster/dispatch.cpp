@@ -1627,8 +1627,8 @@ struct DispatchFSM_::dispatch
                     {
                         fsm.to_trace_pool(nfsm->get_trace());
                         fsm.set_update_time_last_new_tb(nfsm->get_guest_data_post_exec());
+
                         fsm.target_execution_log_ << nfsm->get_target_execution_log() << std::endl;
-            std::cerr << "exec_log: " << nfsm->get_target_execution_log() << std::endl;
                     }
                 }
                 else if(nfsm->is_flag_active<vm::flag::tx_test>())
