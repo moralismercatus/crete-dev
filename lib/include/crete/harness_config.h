@@ -304,7 +304,7 @@ void HarnessConfiguration::load_executable(const boost::property_tree::ptree& co
 {
     namespace fs = boost::filesystem;
 
-    executable_ = config_tree.get<fs::path>("exec");
+    executable_ = fs::absolute(config_tree.get<fs::path>("exec"));
 
     if(!fs::exists(executable_))
         throw std::runtime_error("failed to find executable: " + executable_.generic_string());

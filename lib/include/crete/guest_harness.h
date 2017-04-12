@@ -1,5 +1,7 @@
-#ifndef CRETE_HOST_CRETE_H
+#ifndef CRETE_HOST_CRETE_H // TODO: write a better representative #def name.
 #define CRETE_HOST_CRETE_H
+
+// TODO: resolve redundancy here with front-end/guest.
 
 #include <crete/custom_opcode.h>
 
