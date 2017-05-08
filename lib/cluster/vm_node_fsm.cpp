@@ -592,6 +592,7 @@ struct QemuFSM_::clean
         fs::remove_all(ev.vm_dir_ / log_dir_name);
         fs::remove(hostfile_dir / input_args_name);
         fs::remove(hostfile_dir / trace_ready_name);
+        fs::remove(hostfile_dir / vm_port_file_name);
 
         if(ev.dispatch_options_.mode.distributed)
         {
@@ -1047,7 +1048,7 @@ struct QemuFSM_::is_first_vm
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
     {
-        return fsm.first_vm_;
+        return fsm.first_vm_ || true;
     }
 };
 

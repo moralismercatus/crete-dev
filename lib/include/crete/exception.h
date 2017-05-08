@@ -51,8 +51,8 @@ namespace err
     typedef boost::error_info<struct tag_parse, std::string> parse;
     // Network
     typedef boost::error_info<struct tag_network, std::string> network;
-    typedef boost::error_info<struct tag_network_type, uint32_t> network_type;
-    typedef boost::error_info<struct tag_network_mismatch, uint32_t> network_type_mismatch; // TODO: should include uint32_t,uint32_t to show the mismatch.
+    typedef boost::error_info<struct tag_network_type, uint64_t> network_type;
+    typedef boost::error_info<struct tag_network_mismatch, uint64_t> network_type_mismatch; // TODO: should include uint64_t,uint64_t to show the mismatch.
     // Mode
     typedef boost::error_info<struct tag_mode, std::string> mode;
     // Misc.
