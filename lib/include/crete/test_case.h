@@ -7,6 +7,9 @@
 #include <iterator>
 #include <crete/trace_tag.h>
 
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_serialize.hpp>
+
 namespace crete
 {
     struct TestCaseElement
@@ -34,6 +37,7 @@ namespace crete
     {
     public:
         typedef size_t Priority;
+        typedef boost::uuids::uuid UUID;
 
     public:
         TestCase();
@@ -43,6 +47,7 @@ namespace crete
         void write(std::ostream& os) const;
         Priority get_priority() const { return priority_; }
         void set_priority(const Priority& p) { priority_ = p; }
+        UUID get_uuid() const { return uuid_; }
 
         void set_traceTag(const creteTraceTag_ty &explored_nodes,
                 const creteTraceTag_ty &semi_explored_node, const creteTraceTag_ty &new_nodes);
@@ -59,6 +64,7 @@ namespace crete
 
             ar & elems_;
             ar & priority_;
+            ar & uuid_;
 
             ar & m_explored_nodes;
             ar & m_semi_explored_node;
@@ -69,6 +75,7 @@ namespace crete
     private:
         TestCaseElements elems_;
         Priority priority_; // TODO: meaningless now. In the future, can be used to sort tests.
+        UUID uuid_;
 
         creteTraceTag_ty m_explored_nodes;
         creteTraceTag_ty m_semi_explored_node;

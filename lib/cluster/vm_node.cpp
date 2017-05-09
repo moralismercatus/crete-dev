@@ -90,7 +90,12 @@ auto VMNode::poll() -> void
         {
             push(vm->trace());
             push_guest_data_post_exec(vm->get_guest_data_post_exec());
-            push_target_execution_log(vm->target_execution_log());
+
+            std::stringstream exec_log_ss;
+            exec_log_ss << "[Test case UUID: " << boost::uuids::to_string( vm->last_test_case().get_uuid() )
+                        << "]\n"
+                        << vm->target_execution_log();
+            push_target_execution_log( exec_log_ss.str() );
 
             vm->process_event(ev::trace_queued{});
         }        

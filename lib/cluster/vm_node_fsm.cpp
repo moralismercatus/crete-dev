@@ -139,7 +139,7 @@ public:
     auto guest_data() -> const GuestData&;
     auto get_guest_data_post_exec() -> const GuestDataPostExec&;
     auto target_execution_log() -> const std::string&;
-    auto initial_test() -> const TestCase&;
+    auto last_test_case() -> const TestCase&;
     auto error() -> const log::NodeError&;
 
     // +--------------------------------------------------+
@@ -280,7 +280,7 @@ private:
     std::shared_ptr<Server> server_{std::make_shared<Server>()}; // Ctor acquires unique port.
     bool first_vm_{false};
     GuestData guest_data_;
-    TestCase initial_test_;
+    TestCase last_test_case_;
     boost::thread start_vm_thread_;
     std::string target_;
     crete::log::Logger exception_log_;
@@ -413,9 +413,9 @@ auto QemuFSM_::guest_data() -> const GuestData&
 }
 
 inline
-auto QemuFSM_::initial_test() -> const TestCase&
+auto QemuFSM_::last_test_case() -> const TestCase&
 {
-    return initial_test_;
+    return last_test_case_;
 }
 
 inline
@@ -753,6 +753,8 @@ struct QemuFSM_::start_test
     auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
     {
         auto hostfile = fsm.vm_dir_ / hostfile_dir_name;
+
+        fsm.last_test_case_ = ev.tc_;
 
         if(!fs::exists(hostfile))
         {
