@@ -24,22 +24,31 @@ public:
     uint64_t get_seed_size() const;
     void print_all_seeds() const;
 
-    void gen_crete_test(bool inject_one_concolic);
+    bool gen_crete_test(bool inject_one_concolic);
     void set_outputDir(string outputDirectory);
 
 private:
+    uint64_t get_max_seed_arg_size(uint64_t index) const;
+    uint64_t get_max_seed_file_size(uint64_t index) const;
+
     void gen_config();
-    void consistency_check();
+    void consistency_check() const;
     boost::filesystem::path addConfigOutputDir(string name);
     void gen_crete_test_internal();
-    void gen_crete_test_seeds(boost::filesystem::path seeds_folder);
+    void gen_crete_test_seeds(boost::filesystem::path seeds_folder) const;
 
 private:
     config::RunConfiguration m_crete_config;
     string m_target_exec;
-    set<string> m_seeds;
+
+    map<string, uint32_t> m_seeds_map;
+    vector<vector<string> > m_seeds_args;
+    vector<vector<string> > m_seeds_files;
+
     string m_outputDirectory;
 };
+
+struct ParsedSymArgs;
 
 class CreteTests
 {
@@ -53,6 +62,8 @@ public:
 private:
     void parse_cmdline_tests(const char *input_file);
     void initBaseOutputDirectory();
+
+    void generate_crete_config(const ParsedSymArgs& parsed_config, const string& exec_name);
 private:
     // <test pattern string, crete test>
 //    multimap<string, string> m_crete_tests;

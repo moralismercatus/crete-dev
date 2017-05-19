@@ -69,7 +69,8 @@ main()
     cd $foldername
 
     printf "1. Cleanup old coverage info...\n"
-    lcov --directory $LCOV_DIR --zerocounters
+    real_lcov_dir=$(readlink -m $LCOV_DIR)
+    lcov --directory $real_lcov_dir --zerocounters
 
     printf "2. execute all test cases in folder $DISPATCH_OUT_DIR ...\n"
     init_sandbox=true
@@ -96,15 +97,18 @@ main()
             continue
         fi
 
+        # execute the program without argument
+        eval $PROG_DIR/$target_prog
+
         # execute all the test cases from the current subfolder with target_prog
-        if [ -d  $f/test-case ]; then
+        if [ -d  $f/test-case-parsed ]; then
             # replay under the folder structure of dispatch
             if [ ! -f $f/guest-data/crete-guest-config.serialized ]; then
                 printf "[Error] Missing file: \'crete-guest-config.serialized\' under folder \'$f/guest-data\'"
                 exit
             fi
 
-            test_case_dir=$f/test-case
+            test_case_dir=$f/test-case-parsed
             config_file_path=$f/guest-data/crete-guest-config.serialized
         elif [ -d $f/seeds ]; then
             # replay under the folder structure of crete-config-generator
@@ -124,7 +128,7 @@ main()
             printf "[W/O sandbox] executing $target_prog with tc from \'$test_case_dir\'...\n"
             $CRETE_BIN_DIR/crete-tc-replay -e $PROG_DIR/$target_prog \
                                            -c $config_file_path \
-                                           -t $test_case_dir >> crete-coverage-progress.log
+                                           -t $test_case_dir -l >> crete-coverage-progress.log
         else
             if [ ! -d  $SANDBOX ]; then
                 printf "$SANDBOX does not exists\n"
@@ -136,13 +140,17 @@ main()
                 $CRETE_BIN_DIR/crete-tc-replay -e $PROG_DIR/$target_prog \
                                                -c $config_file_path      \
                                                -t $test_case_dir         \
-                                               -j $SANDBOX >> crete-coverage-progress.log
+                                               -j $SANDBOX               \
+                                               -v /home/chenbo/crete/crete-dev/front-end/guest/sandbox/env/klee-test.env \
+                                               >> crete-coverage-progress.log
             else
                 printf "[W/ sandbox and W/O init_sandbox] executing $target_prog with tc from \'$test_case_dir\'...\n"
                 $CRETE_BIN_DIR/crete-tc-replay -e $PROG_DIR/$target_prog \
                                                -c $config_file_path      \
                                                -t $test_case_dir         \
-                                               -j $SANDBOX -n >> crete-coverage-progress.log
+                                               -j $SANDBOX               \
+                                               -v /home/chenbo/crete/crete-dev/front-end/guest/sandbox/env/klee-test.env \
+                                               -n >> crete-coverage-progress.log
             fi
         fi
     done
@@ -158,8 +166,9 @@ main()
     grep -c -w "Replay Timeout"  crete.replay.log
 
     printf "4. generating coverage report... \n"
-    lcov --base-directory $LCOV_DIR --directory $LCOV_DIR --capture --output-file lcov.info --rc lcov_branch_coverage=1 >> lcov.log
-    genhtml lcov.info -o html --function-coverage --rc lcov_branch_coverage=1 >> lcov.log
+
+    lcov --directory $real_lcov_dir --no-external --capture --output-file lcov.info --rc lcov_branch_coverage=1 >> lcov.log
+    genhtml lcov.info -o html --function-coverage --rc lcov_branch_coverage=1 --ignore-errors source >> lcov.log
 
     $PARSEGCOVCMD $PROG_DIR &> result_gcov.org
 

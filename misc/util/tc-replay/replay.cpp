@@ -1,6 +1,8 @@
 #include "replay.h"
 #include <crete/common.h>
 
+#include <external/alphanum.hpp>
+
 #include <boost/filesystem/fstream.hpp>
 #include <boost/program_options.hpp>
 
@@ -18,7 +20,8 @@ namespace crete
 CreteReplay::CreteReplay(int argc, char* argv[]) :
     m_ops_descr(make_options()),
     m_cwd(fs::current_path()),
-    m_init_sandbox(true)
+    m_init_sandbox(true),
+    m_enable_log(false)
 {
     process_options(argc, argv);
     setup_launch();
@@ -38,6 +41,8 @@ po::options_description CreteReplay::make_options()
                 "directory")
         ("input-sandbox,j", po::value<fs::path>(), "input sandbox/jail directory")
         ("no-ini-sandbox,n", po::bool_switch(), "do not initialize sandbox to accumulate coverage info")
+        ("environment,v", po::value<fs::path>(), "environment variables")
+        ("log,l", po::bool_switch(), "enable log the output of replayed programs")
         ;
 
     return desc;
@@ -100,11 +105,30 @@ void CreteReplay::process_options(int argc, char* argv[])
 
     }
 
+    if(m_var_map.count("environment"))
+    {
+        fs::path p = m_var_map["environment"].as<fs::path>();
+
+        if(!fs::exists(p) && !fs::is_regular(p))
+        {
+            BOOST_THROW_EXCEPTION(Exception() << err::file_missing(p.string()));
+        }
+
+        m_environment = p;
+    }
+
     if(m_var_map.count("seed-only"))
     {
         m_seed_mode = true;
     } else {
         m_seed_mode = false;
+    }
+
+    if(m_var_map.count("log"))
+    {
+        bool input = m_var_map["log"].as<bool>();
+
+        m_enable_log = input;
     }
 
     if(!fs::exists(m_exec))
@@ -364,12 +388,27 @@ void CreteReplay::setup_launch()
     m_launch_ctx.output_behavior.insert(bp::behavior_map::value_type(STDERR_FILENO, bp::redirect_stream_to_stdout()));
     m_launch_ctx.input_behavior.insert(bp::behavior_map::value_type(STDIN_FILENO, bp::capture_stream()));
 
-    //TODO: xxx unified the environment, may use klee's env.sh
-    m_launch_ctx.environment = bp::self::get_environment();
-    m_launch_ctx.environment.erase("LD_PRELOAD");
-    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_replay_preload.so"));
-
     m_launch_ctx.work_directory = m_launch_directory.string();
+
+    if(!m_environment.empty())
+    {
+        assert(m_launch_ctx.environment.empty());
+        std::ifstream ifs (m_environment.string().c_str());
+        if(!ifs.good())
+            BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_environment.string()));
+
+        std::string env_name;
+        std::string env_value;
+        while(ifs >> env_name >> env_value)
+        {
+            m_launch_ctx.environment.insert(bp::environment::value_type(env_name, env_value));
+        }
+    } else {
+        m_launch_ctx.environment = bp::self::get_environment();
+    }
+    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_replay_preload.so"));
+    m_launch_ctx.environment.erase("PWD");
+    m_launch_ctx.environment.insert(bp::environment::value_type("PWD", m_launch_ctx.work_directory));
 
     if(!m_input_sandbox.empty())
     {
@@ -467,6 +506,11 @@ static void timeout_handler(int signum)
     fprintf(stderr, "Send timeout (%d seconds) signal to its child process\n", monitored_timeout);
     assert(monitored_pid != 0);
     kill(monitored_pid, SIGUSR1);
+
+    // exit() can cause deadlock within signal handlers, but it is required for coverage
+    // Double kill the process
+    sleep(1);
+    kill(monitored_pid, SIGKILL);
 }
 
 static inline void init_timeout_handler()
@@ -501,13 +545,40 @@ static inline void process_exit_status(fs::ofstream& log, int exit_status)
     log << "ABNORMAL EXIT STATUS: " << exit_status << endl;
 }
 
+static vector<string> get_files_ordered(const fs::path& input)
+{
+    CRETE_EXCEPTION_ASSERT(fs::exists(input),
+            err::file_missing(input.string()));
+    assert(fs::is_directory(input));
+
+    // Sort the files alphabetically
+    vector<string> file_list;
+    for ( fs::directory_iterator itr( input );
+          itr != fs::directory_iterator();
+          ++itr ){
+        file_list.push_back(itr->path().string());
+    }
+
+    sort(file_list.begin(), file_list.end(), doj::alphanum_less<string>());
+
+    return file_list;
+}
+
 void CreteReplay::replay()
 {
     init_timeout_handler();
 
     // Read all test cases to replay
-    vector<TestCase> tcs = retrieve_tests(m_tc_dir.string());
-    fs::ofstream ofs_replay_log(m_cwd / replay_log_file, std::ios_base::app);
+    vector<string> test_list = get_files_ordered(m_tc_dir);
+
+    fs::ofstream ofs_replay_log;
+
+    if(m_enable_log)
+    {
+        ofs_replay_log.open(m_cwd / replay_log_file, std::ios_base::app);
+    } else {
+        ofs_replay_log.open("/dev/null");
+    }
 
     ofs_replay_log << "Replay Summary: [" << currentDateTime() << "]\n"
             << "Executable path: " << m_exec.string() << endl
@@ -515,13 +586,14 @@ void CreteReplay::replay()
             << "Guest config path: " << m_config.string() << endl
             << "Working directory: " << m_cwd.string() << endl
             << "Launch direcotory: " << m_launch_directory.string() << endl
-            << "Number of test cases: " << tcs.size() << endl
+            << "Number of test cases: " << test_list.size() << endl
             << endl;
 
     uint64_t replayed_tc_count = 1;
-    for(vector<TestCase>::const_iterator it = tcs.begin();
-            it != tcs.end(); ++it) {
-        if(m_seed_mode && (it != tcs.begin()))
+    for (vector<string>::const_iterator it(test_list.begin()), it_end(test_list.end());
+            it != it_end; ++it)
+    {
+        if(m_seed_mode && (replayed_tc_count != 1))
         {
             break;
         }
@@ -539,13 +611,7 @@ void CreteReplay::replay()
 
             // write replay_current_tc, for replay-preload to use
             fs::remove(m_current_tc);
-            std::ofstream ofs(m_current_tc.string().c_str());
-            if(!ofs.good())
-            {
-                BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_current_tc.string()));
-            }
-            it->write(ofs);
-            ofs.close();
+            fs::copy(*it, m_current_tc);
 
             // copy guest-config, for replay-preload to use
             try

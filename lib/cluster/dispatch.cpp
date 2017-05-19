@@ -1223,10 +1223,11 @@ public:
     auto next_test() -> boost::optional<TestCase>;
     auto node_registrar() -> AtomicGuard<NodeRegistrar>&;
     auto display_status(std::ostream& os) -> void;
-    auto write_tc_tree(std::ostream& os) -> void;
+    auto write_test_pool_log(std::ostream& os) -> void;
     auto write_statistics() -> void;
     auto test_pool() -> TestPool&;
     auto trace_pool() -> TracePool&;
+    auto store_config_file() -> void;
     auto set_up_root_dir() -> void;
     auto launch_node_registrar(Port master) -> void;
     auto elapsed_time() -> uint64_t;
@@ -1686,7 +1687,7 @@ struct DispatchFSM_::dispatch
                     {
                         if(fsm.options_.vm.initial_tc.get_elements().size() > 0)
                         {
-                            fsm.test_pool_.insert(fsm.options_.vm.initial_tc);
+                            fsm.test_pool_.insert_initial_tcs(vector<TestCase>(1, fsm.options_.vm.initial_tc));
                         }
                         else
                         {
@@ -1700,7 +1701,7 @@ struct DispatchFSM_::dispatch
                         assert(fsm.next_target_seeds_queue_.size() == fsm.next_target_queue_.size()); // FIXME: xxx use exception
 
                         std::vector<TestCase> seeds = retrieve_tests(fsm.current_target_seeds_.string());
-                        fsm.test_pool_.insert(seeds);
+                        fsm.test_pool_.insert_initial_tcs(seeds);
                     }
 
                     nfsm->process_event(vm::poll{});
@@ -1721,11 +1722,7 @@ struct DispatchFSM_::dispatch
             {
                 if(nfsm->is_flag_active<svm::flag::test_rxed>())
                 {
-                    // Assumption from svm_node The last test case is the input tc
-                    std::vector<TestCase> new_tcs = nfsm->tests();
-                    TestCase input_tc = new_tcs.back();
-                    new_tcs.pop_back();
-                    fsm.test_pool_.insert(new_tcs, input_tc);
+                    fsm.test_pool_.insert(nfsm->tests());
 
                     nfsm->process_event(svm::test{});
                 }
@@ -1815,6 +1812,21 @@ struct DispatchFSM_::terminate
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> void
     {
+        fs::path coverage_exec = fsm.options_.coverage.cmd_path;
+        if(!coverage_exec.empty() && fs::is_regular(coverage_exec))
+        {
+            std::string cmd = fs::canonical(coverage_exec).string() + " " +
+                    fs::canonical(fsm.root_.parent_path()).string();;
+
+            fprintf(stderr, " coverage_cmd = %s \n"
+                    "Running batch_coverage ... ",
+                    cmd.c_str());
+
+            system(cmd.c_str());
+
+            fprintf(stderr, " Finished batch_coverage.\n");
+        }
+
         // TODO: Hacky means of shutting down NodeRegistrar.
         // Cont: we shouldn't have to pretend to be a node to cause it to shut down.
         Client client{"localhost", std::to_string(fsm.master_port_)};
@@ -1856,7 +1868,7 @@ struct DispatchFSM_::finish
             BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{test_case_tree_log.string()});
         }
 
-        fsm.write_tc_tree(tc_tree_ofs);
+        fsm.write_test_pool_log(tc_tree_ofs);
     }
 };
 
@@ -2075,6 +2087,45 @@ auto DispatchFSM_::trace_pool() -> TracePool&
     return trace_pool_;
 }
 
+auto DispatchFSM_::store_config_file() -> void
+{
+    namespace pt = boost::property_tree;
+
+    if(root_.parent_path().filename() != dispatch_root_dir_name)
+    {
+        return;
+    }
+
+    if(!fs::exists(root_))
+    {
+        if(!fs::create_directories(root_))
+        {
+            BOOST_THROW_EXCEPTION(Exception{} << err::file_create{root_.string()});
+        }
+    }
+
+    fs::path config_path = options_.file_path;
+    fs::ifstream ifs(config_path);
+
+    if(!ifs.good())
+    {
+        BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{config_path.string()});
+    }
+
+    pt::ptree config;
+
+    pt::read_xml(ifs,
+                 config,
+                 boost::property_tree::xml_parser::trim_whitespace |
+                 boost::property_tree::xml_parser::no_comments);
+    ifs.close();
+
+    fs::path out_path = root_ / dispatch_config_file_name;
+    boost::property_tree::write_xml(
+            out_path.string(), config, std::locale(),
+            boost::property_tree::xml_writer_make_settings<std::string>('\t', 1));
+}
+
 auto DispatchFSM_::set_up_root_dir() -> void
 {
     auto timestamp_root = root_.filename();
@@ -2085,6 +2136,8 @@ auto DispatchFSM_::set_up_root_dir() -> void
 
         if(root_.parent_path().filename() == dispatch_root_dir_name)
         {
+            store_config_file();
+
             timestamp_root = root_.filename();
             root_ /= target;
         }
@@ -2200,9 +2253,9 @@ auto DispatchFSM_::display_status(std::ostream& os) -> void
     os << endl;
 }
 
-auto DispatchFSM_::write_tc_tree(std::ostream& os) -> void
+auto DispatchFSM_::write_test_pool_log(std::ostream& os) -> void
 {
-    test_pool_.write_tc_tree(os);
+    test_pool_.write_log(os);
 }
 
 auto DispatchFSM_::write_statistics() -> void
@@ -2688,13 +2741,6 @@ auto extract_initial_test(const config::RunConfiguration& config) -> TestCase
         assert(elem.data_size == file.size);
 
         tc.add_element(elem);
-
-        TestCaseElement elem_posix = elem;
-        std::string posix_name = name + "-posix";
-        elem_posix.name = std::vector<uint8_t>(posix_name.begin(), posix_name.end());
-        elem_posix.name_size = posix_name.size();
-
-        tc.add_element(elem_posix);
     }
 
     if(concolic_stdin.concolic)
@@ -2709,12 +2755,6 @@ auto extract_initial_test(const config::RunConfiguration& config) -> TestCase
         std::string name = "crete-stdin";
         elem.name = std::vector<uint8_t>(name.begin(), name.end());
         elem.name_size = elem.name.size();
-
-        tc.add_element(elem);
-
-        name = "crete-stdin-posix";
-        elem.name = std::vector<uint8_t>(name.begin(), name.end());
-        elem.name_size = name.size();
 
         tc.add_element(elem);
     }

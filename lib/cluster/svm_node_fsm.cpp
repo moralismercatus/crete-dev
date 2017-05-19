@@ -10,6 +10,7 @@
 #include <crete/async_task.h>
 #include <crete/logger.h>
 #include <crete/util/debug.h>
+#include <crete/common.h>
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -270,10 +271,13 @@ void KleeFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
             {
                 auto* se = dynamic_cast<SymbolicExecException*>(&e);
 
-                *fsm.tests_ = se->tests_;
-
-                // Retrieve the input test case;
+                fsm.tests_->clear();
+                // Retrieve the base test case first;
                 fsm.tests_->push_back(retrieve_test_serialized((fsm.trace_dir_ / "concrete_inputs.bin").string()));
+                if(!se->tests_.empty())
+                {
+                    fsm.tests_->insert(fsm.tests_->end(), se->tests_.begin(), se->tests_.end());
+                }
 
                 dump_log_file(ss, fsm.trace_dir_ / klee_dir_name / symbolic_log_name);
             }
@@ -599,7 +603,7 @@ static bool is_klee_log_correct(const boost::filesystem::path& file)
         BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(file.string()));
     }
 
-    boost::regex valid_patterns("KLEE: output directory = \"klee-out-0\"|"
+    boost::regex valid_patterns("KLEE: output directory .*klee-out-0\"|"
                                 "(KLEE: done: total instructions = )[0-9]+|"
                                 "(KLEE: done: completed paths = )[0-9]+|"
                                 "(KLEE: done: generated tests = )[0-9]+"
@@ -701,12 +705,12 @@ struct KleeFSM_::execute_symbolic
 
             if(!process::is_exit_status_zero(status))
             {
-                BOOST_THROW_EXCEPTION(SymbolicExecException{retrieve_tests_serialized(kdir.string() + "/ktest_pool")} << err::process_exit_status{exe});
+                BOOST_THROW_EXCEPTION(SymbolicExecException{retrieve_tests_serialized((kdir / std::string(CRETE_SVM_TEST_FOLDER)).string())} << err::process_exit_status{exe});
             }
 
             if(!is_klee_log_correct(log_path))
             {
-                BOOST_THROW_EXCEPTION(SymbolicExecException{retrieve_tests_serialized(kdir.string() + "/ktest_pool")} << err::process{exe});
+                BOOST_THROW_EXCEPTION(SymbolicExecException{retrieve_tests_serialized((kdir / std::string(CRETE_SVM_TEST_FOLDER)).string())} << err::process{exe});
             }
         }
         , fsm.trace_dir_
@@ -726,10 +730,15 @@ struct KleeFSM_::retrieve_result
         {
             auto kdir = trace_dir / klee_dir_name;
 
-            *tests = retrieve_tests_serialized(kdir.string() + "/ktest_pool");
+            std::vector<TestCase> tmp_tsts = retrieve_tests_serialized((kdir / std::string(CRETE_SVM_TEST_FOLDER)).string());
 
-            // Retrieve the input test case
+            tests->clear();
+            // Retrieve the base test case at first
             tests->push_back(retrieve_test_serialized((trace_dir / "concrete_inputs.bin").string()));
+            if(!tmp_tsts.empty())
+            {
+                tests->insert(tests->end(), tmp_tsts.begin(), tmp_tsts.end());
+            }
 
         }, fsm.trace_dir_, fsm.tests_});
     }

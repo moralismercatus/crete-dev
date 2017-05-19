@@ -20,6 +20,7 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/shared_ptr.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 
 #include <unistd.h>
 #include <sys/mount.h>
@@ -77,6 +78,7 @@ private:
     bp::posix_context m_launch_ctx;
 
     fs::path m_sandbox_dir;
+    fs::path m_environment;
     fs::path m_proc_map;
     fs::path m_guest_config_serialized;
 
@@ -196,13 +198,6 @@ public:
         template <class Event,class FSM>
         void on_exit(Event const&,FSM& ) {std::cerr << "[crete-run] leaving: LoadDefaults" << std::endl;}
     };
-    struct LoadInputData : public msm::front::state<>
-    {
-        template <class Event,class FSM>
-        void on_entry(Event const& ,FSM&) {std::cerr << "[crete-run] entering: LoadInputData" << std::endl;}
-        template <class Event,class FSM>
-        void on_exit(Event const&,FSM& ) {std::cerr << "[crete-run] leaving: LoadInputData" << std::endl;}
-    };
     struct TransmitGuestData : public msm::front::state<>
     {
         template <class Event,class FSM>
@@ -271,7 +266,6 @@ public:
     void connect_host(const poll&);
     void load_host_data(const poll&);
     void load_defaults(const poll&);
-    void load_file_data(const poll&);
     void transmit_guest_data(const poll&);
     void prime(const poll&);
     void process_config(const poll&);
@@ -321,9 +315,7 @@ public:
     //   +------------------+------------------+------------------+---------------------+------------------+
     a_row<LoadHostData      ,poll              ,LoadDefaults      ,&M::load_host_data                        >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-    a_row<LoadDefaults      ,poll              ,LoadInputData     ,&M::load_defaults                         >,
-    //   +------------------+------------------+------------------+---------------------+------------------+
-    a_row<LoadInputData     ,poll              ,TransmitGuestData ,&M::load_file_data                       >,
+    a_row<LoadDefaults      ,poll              ,TransmitGuestData ,&M::load_defaults                         >,
     //   +------------------+------------------+------------------+---------------------+------------------+
     a_row<TransmitGuestData ,poll              ,Prime             ,&M::transmit_guest_data                   >,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -355,15 +347,18 @@ struct start // Basically, serves as constructor.
 {
     start(const std::string& host_ip,
           const fs::path& config,
-          const fs::path& sandbox) :
+          const fs::path& sandbox,
+          const fs::path& environment) :
         host_ip_(host_ip),
         config_(config),
-        sandbox_(sandbox)
+        sandbox_(sandbox),
+        environment_(environment)
     {}
 
     const std::string& host_ip_;
     const fs::path& config_;
     const fs::path& sandbox_;
+    const fs::path& environment_;
 };
 
 RunnerFSM_::RunnerFSM_() :
@@ -380,6 +375,7 @@ void RunnerFSM_::init(const start& ev)
     guest_config_path_ = ev.config_;
 
     m_sandbox_dir = ev.sandbox_;
+    m_environment = ev.environment_;
 }
 
 void RunnerFSM_::verify_env(const poll&)
@@ -509,7 +505,7 @@ void RunnerFSM_::load_defaults(const poll&)
 }
 
 static unsigned monitored_pid = 0;
-static unsigned monitored_timeout = 3;
+static unsigned monitored_timeout = 300;
 
 static void timeout_handler(int signum)
 {
@@ -568,17 +564,34 @@ void RunnerFSM_::setup_launch_exec()
     m_launch_ctx.output_behavior.insert(bp::behavior_map::value_type(STDERR_FILENO, bp::redirect_stream_to_stdout()));
     m_launch_ctx.input_behavior.insert(bp::behavior_map::value_type(STDIN_FILENO, bp::capture_stream()));
 
-    //TODO: xxx unified the environment, may use klee's env.sh
-    m_launch_ctx.environment = bp::self::get_environment();
-    m_launch_ctx.environment.erase("LD_PRELOAD");
-    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_run_preload.so"));
-
     m_launch_ctx.work_directory = m_exec_launch_dir.string();
 
     if(!m_sandbox_dir.empty())
     {
         m_launch_ctx.chroot = CRETE_SANDBOX_PATH;
     }
+
+    if(!m_environment.empty())
+    {
+        assert(m_launch_ctx.environment.empty());
+        std::ifstream ifs (m_environment.string().c_str());
+        if(!ifs.good())
+            BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_environment.string()));
+
+        std::string env_name;
+        std::string env_value;
+        fprintf(stderr, "Using unified environment variables from %s\n", m_environment.string().c_str());
+        while(ifs >> env_name >> env_value)
+        {
+            fprintf(stderr, "%s=%s\n", env_name.c_str(), env_value.c_str());
+            m_launch_ctx.environment.insert(bp::environment::value_type(env_name, env_value));
+        }
+    } else {
+        m_launch_ctx.environment = bp::self::get_environment();
+    }
+    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_run_preload.so"));
+    m_launch_ctx.environment.erase("PWD");
+    m_launch_ctx.environment.insert(bp::environment::value_type("PWD", m_launch_ctx.work_directory));
 
     // 4. setup the path for proc-map and guest_config_serialized
     if(m_sandbox_dir.empty())
@@ -605,20 +618,19 @@ void RunnerFSM_::init_launch_folder()
     init_ramdisk();
 }
 
-void RunnerFSM_::load_file_data(const poll&)
-{
-    guest_config_.load_file_data();
-}
-
 void RunnerFSM_::transmit_guest_data(const poll&)
 {
+    guest_config_.load_file_data();
+
     PacketInfo pk;
     pk.id = 0; // TODO: Don't care? Maybe. What about a custom instruction that reads the VM's pid as an ID, to be checked both for sanity and to give the instance a way to check whether the VM is still running.
-    pk.size = 0; // Don't care. Set by write_serialized_text.
+    pk.size = 0; // Don't care. Set by write_serialized_text()
     pk.type = packet_type::guest_configuration;
-    write_serialized_text_xml(*client_,
-                              pk,
-                              guest_config_);
+    write_serialized_text(*client_,
+                          pk,
+                          guest_config_);
+
+    guest_config_.clear_file_data();
 }
 
 void RunnerFSM_::prime(const poll&)
@@ -666,7 +678,7 @@ void RunnerFSM_::write_configuration() const
         BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_guest_config_serialized.string()));
     }
 
-    boost::archive::text_oarchive oa(ofs);
+    boost::archive::binary_oarchive oa(ofs);
     oa << guest_config_;
 }
 
@@ -684,7 +696,7 @@ static inline void process_exit_status(std::ostream& log, int exit_status)
         int signum = exit_status - CRETE_EXIT_CODE_SIG_BASE ;
         if(signum == SIGUSR1)
         {
-            log << "Replay Timeout\n";
+            log << "Timeout reached: " << monitored_timeout << " seconds\n";
         } else {
             log << "[Signal Caught] signum = " << signum << ", signame: " << strsignal(signum) << '\n';
         }
@@ -777,7 +789,6 @@ void RunnerFSM_::validate_setup(const poll&)
 void RunnerFSM_::update_config(const poll&)
 {
     guest_config_.is_first_iteration(false);
-    guest_config_.clear_file_data();
 
     write_configuration();
 
@@ -1311,6 +1322,7 @@ po::options_description Runner::make_options()
             ("config,c", po::value<fs::path>(), "configuration file")
             ("ip,i", po::value<std::string>(), "host IP")
             ("sandbox,s", po::value<fs::path>(), "sandbox directory")
+            ("environment,v", po::value<fs::path>(), "environment file")
         ;
 
     return desc;
@@ -1370,6 +1382,18 @@ void Runner::process_options()
 
         sandbox_dir_ = p;
     }
+
+    if(var_map_.count("environment"))
+    {
+        fs::path p = var_map_["environment"].as<fs::path>();
+
+        if(!fs::exists(p) && !fs::is_regular(p))
+        {
+            BOOST_THROW_EXCEPTION(Exception() << err::file_missing(p.string()));
+        }
+
+        environment_path_ = p;
+    }
 }
 
 void Runner::start_FSM()
@@ -1386,7 +1410,8 @@ void Runner::run()
 {
     start s(ip_,
             target_config_,
-            sandbox_dir_);
+            sandbox_dir_,
+            environment_path_);
 
     fsm_->process_event(s);
 

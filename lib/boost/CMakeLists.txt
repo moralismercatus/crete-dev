@@ -10,10 +10,9 @@ ExternalProject_Add(
         SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/boost-prefix/src/boost_1_59_0
 	BUILD_IN_SOURCE 1
 
-	DOWNLOAD_COMMAND
-        wget https://sourceforge.net/projects/boost/files/boost/1.59.0/boost_1_59_0.tar.bz2 &&
-        tar -xf boost_1_59_0.tar.bz2
-
+        DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}
+	URL ${CMAKE_CURRENT_SOURCE_DIR}/boost_1_59_0.tar.bz2
+        URL_MD5 6162bc9360fcae874c72d8b80d68df68
 	UPDATE_COMMAND ""
 
 	CONFIGURE_COMMAND
