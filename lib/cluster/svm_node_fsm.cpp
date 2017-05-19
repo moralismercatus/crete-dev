@@ -648,7 +648,7 @@ struct KleeFSM_::execute_symbolic
             }
             else
             {
-                exe = bp::find_executable_in_path("crete-klee");
+                exe = bp::find_executable_in_path("crete-klee-1.3.0");
             }
 
             auto args = std::vector<std::string>{fs::path{exe}.filename().string()};
