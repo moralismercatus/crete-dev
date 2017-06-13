@@ -290,7 +290,7 @@ public:
                                                                        store_trace,
                                                                        terminate>>      ,And_<is_prev_task_finished
                                                                                              ,And_<is_ovmf_mode
-                                                                                                  ,is_finished>> >,
+                                                                                                  ,is_finished>> >, // TODO: rather than 'terminate', it may make more sense to use the signal technique in crete-run used for timeouts. This may enable stopping and dumping rather than aboring and losing the trace.
     //   +------------------+------------------+------------------+---------------------+------------------+
       Row<StoreTrace        ,ev::poll          ,Finished          ,none                 ,is_prev_task_finished>,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -325,6 +325,7 @@ private:
     log::NodeError error_log_;
     std::chrono::time_point<std::chrono::system_clock> start_time_; // TODO: identical to DispatchFSM. Abstract into utility class.
     uint64_t tc_timeout_duration_{30};
+    TestCase current_tc_;
 
     std::shared_ptr<GuestDataPostExec> guest_data_post_exec_{std::make_shared<GuestDataPostExec>()};
 
@@ -346,7 +347,8 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
        << except_info
        << "Node: VM\n"
        << "Target: " << fsm.target_ << "\n"
-       << "VM dir: " << fsm.vm_dir_ << "\n";
+       << "VM dir: " << fsm.vm_dir_ << "\n"
+       << "Test case UUID: " << boost::uuids::to_string(fsm.current_tc_.get_uuid()) << "\n";
 
     std::cerr << ss.str();
 
@@ -376,7 +378,9 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
 
     if(dispatch_options_.mode.distributed)
     {
-        ss << child_->acquire()->get_stdout().rdbuf();
+        ss << "QEMU stdout/stderr:\n"
+           << child_->acquire()->get_stdout().rdbuf()
+           << '\n';
     }
 
     if(dynamic_cast<VMTimeoutException*>(&e))
@@ -388,6 +392,8 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
     }
 
     error_log_.log = ss.str();
+
+    std::cerr << error_log_.log << std::endl;
 
     if(dynamic_cast<VMException*>(&e))
     {
@@ -870,6 +876,7 @@ struct QemuFSM_::prepare_test
     auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState& ts) -> void
     {
         fsm.start_time_ = std::chrono::system_clock::now();
+        fsm.current_tc_ = ev.tc_;
 
         ts.async_task_.reset(new AsyncTask{[](const fs::path vm_dir
                                              ,const TestCase tc)

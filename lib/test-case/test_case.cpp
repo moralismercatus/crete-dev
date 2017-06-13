@@ -8,6 +8,7 @@
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
+#include <boost/uuid/uuid_generators.hpp>
 
 #include <cassert>
 #include <iomanip>
@@ -73,7 +74,8 @@ namespace crete
     }
 
     TestCase::TestCase() :
-        priority_(0)
+        priority_(0),
+        uuid_( boost::uuids::random_generator()() )
     {
     }
 

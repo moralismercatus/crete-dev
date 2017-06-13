@@ -6,6 +6,7 @@
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
+#include <boost/uuid/uuid_io.hpp>
 
 #include <crete/exception.h>
 
@@ -142,19 +143,26 @@ auto TestPool::write_test_case(const TestCase& tc, const uint64_t tc_index) -> v
     namespace fs = boost::filesystem;
 
     auto tc_root = root_ / "test-case";
+    auto tc_uuids_dir = tc_root / "uuids";
 
     if(!fs::exists(tc_root))
         fs::create_directories(tc_root);
+    if(!fs::exists(tc_uuids_dir))
+        fs::create_directories(tc_uuids_dir);
 
-    auto path = tc_root / std::to_string(tc_index);
+    auto tc_path = tc_root / std::to_string(tc_index);
+    auto const tc_path_rel_to_symlink = ".." / tc_path.filename();
 
-    assert(!fs::exists(path) && "[Test Pool] Duplicate test case name.\n");
-    fs::ofstream ofs(path,
+    fs::create_symlink(tc_path_rel_to_symlink,
+                       tc_uuids_dir / boost::uuids::to_string(tc.get_uuid()));
+
+    assert(!fs::exists(tc_path) && "[Test Pool] Duplicate test case name.\n");
+    fs::ofstream ofs(tc_path,
                      std::ios_base::out | std::ios_base::binary);
 
     if(!ofs.good())
     {
-        BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{path.string()});
+        BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{tc_path.string()});
     }
 
     tc.write(ofs);
