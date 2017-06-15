@@ -51,6 +51,7 @@ namespace vm
 // + Exceptions                                       +
 // +--------------------------------------------------+
 struct VMException : public Exception {};
+struct VMNoRecoveryException : public VMException {};
 
 // +--------------------------------------------------+
 // + Events                                           +
@@ -337,21 +338,46 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
 
     if(dispatch_options_.mode.distributed)
     {
-        ss << child_->acquire()->get_stdout().rdbuf();
-    }
+        auto c = child_->acquire();
 
-    error_log_.log = ss.str();
+        if(process::is_running(c->get_id()))
+        {
+            try
+            {
+                c->terminate(true);
+
+                ss << "VM process forcefully terminated.\n";
+            }
+            catch(std::exception& e)
+            {
+                ss << "Terminating VM process failed: " << e.what() << '\n';
+            }
+        }
+
+        ss << "VM stdout/stderr:\n"
+           << c->get_stdout().rdbuf();
+    }
 
     if(dynamic_cast<VMException*>(&e))
     {
-        std::cerr << "VMException thrown.\n";
-        fsm.process_event(ev::error{});
+        if(dynamic_cast<VMNoRecoveryException*>(&e))
+        {
+            std::cerr << "VMNoRecoveryException thrown.\n";
+            fsm.process_event(ev::terminate{});
+        }
+        else
+        {
+            std::cerr << "VMException thrown.\n";
+            fsm.process_event(ev::error{});
+        }
     }
     else
     {
         std::cerr << "non VMException thrown.\n";
         fsm.process_event(ev::terminate{});
     }
+
+    error_log_.log = ss.str();
 
     std::cerr << "======================================================\n";
 }
@@ -699,13 +725,13 @@ struct QemuFSM_::start_vm
             }
             else
             {
-                BOOST_THROW_EXCEPTION(Exception{} << err::arg_invalid_str{dispatch_options.vm.arch}
+                BOOST_THROW_EXCEPTION(VMNoRecoveryException{} << err::arg_invalid_str{dispatch_options.vm.arch}
                                                   << err::arg_invalid_str{"vm.arch"});
             }
 
             if(!fs::exists(exe))
             {
-                BOOST_THROW_EXCEPTION(Exception{} << err::file_missing{exe});
+                BOOST_THROW_EXCEPTION(VMNoRecoveryException{} << err::file_missing{exe});
             }
 
             auto args = std::vector<std::string>{fs::absolute(exe).string() // It appears our modified QEMU requires full path in argv[0]...
@@ -737,7 +763,7 @@ struct QemuFSM_::start_vm
 
             if(!process::is_running(child->acquire()->get_id()))
             {
-                BOOST_THROW_EXCEPTION(VMException{} << err::process_exited{"pid_"});
+                BOOST_THROW_EXCEPTION(VMNoRecoveryException{} << err::process_exited{"pid_"});
             }
         },
         fsm.vm_dir_,
