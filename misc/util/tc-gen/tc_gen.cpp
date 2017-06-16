@@ -137,6 +137,8 @@ auto TestCaseUtility::make_options() -> boost::program_options::options_descript
         ("config,c", po::value<fs::path>(), "XML describing test-case to generate")
         ("out-file,o", po::value<fs::path>(), "output file (default: ./input_arguments.bin)")
         ("test-case,t", po::value<fs::path>(), "test-case or test-case directory")
+        ("deserialize,d", po::value<fs::path>(), "directory or test-case with serialized test-cases."
+                                                 " Output: <file>-deserialized")
             ;
 
     return desc;
@@ -235,6 +237,58 @@ auto TestCaseUtility::process_options() -> void
         else
         {
             printer(tcp);
+        }
+    }
+    if( var_map_.count( "deserialize" ) )
+    {
+        auto tcp = var_map_["deserialize"].as<fs::path>();
+
+        CRETE_EXCEPTION_ASSERT( fs::exists( tcp )
+                              , err::file_missing{ tcp.string() } );
+
+        auto deserialize = []( const fs::path& in_file
+                             , const fs::path& out_file )
+        {
+            fs::ifstream ifs( in_file
+                            , fs::ifstream::in | fs::ifstream::binary );
+
+            CRETE_EXCEPTION_ASSERT( ifs.good()
+                                  , err::file_open_failed{ in_file.string() } );
+
+            auto tc = read_serialized( ifs );
+
+            fs::ofstream ofs( out_file
+                            , fs::ofstream::out | fs::ofstream::binary );
+
+            CRETE_EXCEPTION_ASSERT( ofs.good()
+                                  , err::file_open_failed{ out_file.string() } );
+
+            tc.write( ofs );
+        };
+
+        auto outp = fs::absolute( tcp.parent_path() );
+
+        outp /= ( tcp.filename().string() + "-deserialized" );
+
+        if( fs::is_directory( tcp ) )
+        {
+            fs::create_directory( outp );;
+
+            for( const auto e : fs::directory_iterator( tcp ) )
+            {
+                auto p = e.path();
+
+                if( fs::is_regular_file( p ) )
+                {
+                    deserialize( p
+                               , outp / p.filename() );
+                }
+            }
+        }
+        else
+        {
+            deserialize( tcp
+                       , outp );
         }
     }
 }
