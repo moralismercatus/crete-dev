@@ -247,7 +247,7 @@ def parse_args():
                        , help = 'Directory with harness and config to test' )
     parser.add_argument( '-t'
                        , '--timeout'
-                       , required = True
+                       # , required = True
                        # , type = int
                        , help = 'Time duration to test each entry point.' )
     parser.add_argument( '-r'
@@ -281,17 +281,22 @@ def init_crete_cmds( bin_dir ):
                                   + os.path.join( bin_dir, 'boost' )
 
 def replay_test_cases( exe ):
-    cmd = [ 'crete-tc-compare'
-          , '--batch-patch'
-          , 'dispatch/last' ]
+    if not os.path.exists( 'dispatch/last/crete.guest.xml/test-case-parsed' ):
+        cmd = [ 'crete-tc-compare'
+              , '--batch-patch'
+              , 'dispatch/last' ]
 
-    print( cmd )
-    subprocess.call( cmd )
+        print( cmd )
+        subprocess.call( cmd )
 
     prev_cwd = os.getcwd()
     os.chdir( 'dispatch/last/crete.guest.xml' )
+
+    if os.path.exists( 'replay' ):
+        shutil.rmtree( 'replay' )
     os.mkdir( 'replay' )
     os.chdir( 'replay' )
+
 
     with open( crete_env_file['path'], 'w' ) as f:
         for k,v in crete_env_file['content'].iteritems():
@@ -354,16 +359,19 @@ def process_args( args ):
 
         return
 
-    if not os.path.exists( 
-        os.path.join( args.test_archive_dir,
-                      crete_guest_config_name ) ):
-            print( 'Test archive config not found!' )
-            print( 'Aborting!!!' )
-            sys.exit( 1 )
-
-    run_test( args.test_archive_dir )
+    if args.test_archive_dir:
+        if not os.path.exists( 
+            os.path.join( args.test_archive_dir,
+                          crete_guest_config_name ) ):
+                print( 'Test archive config not found!' )
+                print( 'Aborting!!!' )
+                sys.exit( 1 )
+        run_test( args.test_archive_dir )
 
     if args.replay:
+        crete_env_file[ 'content' ] \
+                [ 'LD_LIBRARY_PATH' ] = os.path.abspath( os.path.realpath(
+                    args.crete_dir ) )
         replay_test_cases( os.path.abspath( args.replay ) )
     if args.gen_coverage:
         if os.path.exists( 'dispatch/last/crete.guest.xml/replay' ):
