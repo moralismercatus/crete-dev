@@ -3,6 +3,7 @@
 #include <crete/logger.h>
 #include <crete/async_task.h>
 #include <crete/guest_data_post_exec.hpp>
+#include <crete/terminal.hpp>
 
 #include <boost/property_tree/ptree.hpp>
 #include <boost/filesystem.hpp>
@@ -2108,12 +2109,16 @@ auto DispatchFSM_::set_up_root_dir() -> void
                        last_symlink);
 }
 
+
+
 auto DispatchFSM_::display_status(std::ostream& os) -> void
 {
     using namespace std;
+    using namespace term;
 
-    system("clear");
-
+    display_banner();
+    restore_terminal();
+//    system("clear");
     os << setw(12) << "time (s)"
          << "|"
          << setw(12) << "tests left"

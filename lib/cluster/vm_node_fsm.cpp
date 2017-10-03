@@ -143,12 +143,16 @@ public:
     template <class Event,class FSM>
     void on_entry(Event const&,FSM&)
     {
+#if defined(CRETE_DEBUG)
         std::cout << "entering: QemuFSM_" << std::endl;
+#endif // defined(CRETE_DEBUG)
     }
     template <class Event,class FSM>
     void on_exit(Event const&,FSM&)
     {
+#if defined(CRETE_DEBUG)
         std::cout << "leaving: QemuFSM_" << std::endl;
+#endif // defined(CRETE_DEBUG)
     }
 
     // +--------------------------------------------------+
@@ -416,40 +420,50 @@ auto QemuFSM_::error() -> const log::NodeError&
 // +--------------------------------------------------+
 struct QemuFSM_::Start : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Start" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Start" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::ValidateImage : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: ValidateImage" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: ValidateImage" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::UpdateImage : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: UpdateImage" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: UpdateImage" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::StartVM : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: StartVM" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: StartVM" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::RxGuestData : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: RxGuestData" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: RxGuestData" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -457,35 +471,43 @@ struct QemuFSM_::GuestDataRxed : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::guest_data_rxed>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: GuestDataRxed" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: GuestDataRxed" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::NextTest : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::next_test>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: NextTest" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: NextTest" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::Testing : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Testing" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Testing" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::StoreTrace : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: StoreTrace" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: StoreTrace" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_;
 };
@@ -493,51 +515,63 @@ struct QemuFSM_::Finished : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::trace_ready>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Finished" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Finished" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::ConnectVM : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: ConnectVM" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: ConnectVM" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 
     std::unique_ptr<AsyncTask> async_task_{new AsyncTask{}};
 };
 struct QemuFSM_::Active : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Active" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Active" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::Terminated : public msm::front::terminate_state<>
 {
     using flag_list = mpl::vector1<flag::terminated>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Terminated" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Terminated" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::Valid : public msm::front::state<>
 {
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Valid" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Valid" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 struct QemuFSM_::Error : public msm::front::state<>
 {
     using flag_list = mpl::vector1<flag::error>;
 
+#if defined(CRETE_DEBUG)
     template <class Event,class FSM>
     void on_entry(Event const& ,FSM&) {std::cout << "entering: Error" << std::endl;}
     template <class Event,class FSM>
     void on_exit(Event const&,FSM& ) {std::cout << "leaving: Error" << std::endl;}
+#endif // defined(CRETE_DEBUG)
 };
 // +--------------------------------------------------+
 // + Actions                                          +
@@ -710,10 +744,12 @@ struct QemuFSM_::start_vm
                        ,add_args.begin()
                        ,add_args.end());
 
+#if defined(CRETE_DEBUG)
             std::cerr << "qemu path: " << fs::absolute(exe).string() << std::endl;
             for(auto&& arg : args)
                 std::cerr << "qemu args: " << arg << std::endl;
             std::cerr << "working dir: " << ctx.work_directory << std::endl;
+#endif // defined(CRETE_DEBUG)
 
             // FIXME: xxx child process can be dead-locked caused by output redirection
             child->acquire() = bp::launch(exe, args, ctx);
@@ -1061,14 +1097,12 @@ struct QemuFSM_::is_distributed
     template <class FSM,class SourceState,class TargetState>
     auto operator()(ev::start const& ev, FSM&, SourceState&, TargetState&) -> bool
     {
-        std::cerr << "ev.dispatch_options_.mode.distributed" << std::endl;
         return ev.dispatch_options_.mode.distributed;
     }
 
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> bool
     {
-        std::cerr << "fsm.dispatch_options_.mode.distributed" << std::endl;
         return fsm.dispatch_options_.mode.distributed;
     }
 };
