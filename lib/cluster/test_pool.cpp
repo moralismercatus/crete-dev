@@ -67,7 +67,12 @@ auto TestPool::insert_initial_tc_from_config(const TestCase& tc) -> bool
     assert(next_.empty());
     assert(tc_count_ == 0);
 
-    next_.push(tc);
+    auto t = tc;
+
+    t.set_tp_index(1);
+
+    next_.push(t);
+
     return true;
 }
 
@@ -122,9 +127,13 @@ auto TestPool::write_log(std::ostream& os) -> void
 
 auto TestPool::insert_internal(const TestCase& tc) -> bool
 {
-    next_.push(tc);
+    auto t = tc;
+    uint64_t tp_index = ++tc_count_;
 
-    write_test_case(tc, root_ / "test-case" / std::to_string(++tc_count_));
+    t.set_tp_index(tp_index);
+
+    next_.push(t);
+    write_test_case(t, root_ / "test-case" / std::to_string(tp_index));
 
     return true;
 }
@@ -191,6 +200,8 @@ auto TestPool::get_complete_tc(const TestCase& patch_tc) -> boost::optional<Test
     if(issued_tc_hash_pool_.insert(complete_tc.get_elements()).second)
     {
         complete_tc.set_issue_index(issued_tc_hash_pool_.size());
+        complete_tc.set_tp_index(patch_tc.get_tp_index());
+	
         return boost::optional<TestCase>{complete_tc};
     } else {
         ++m_duplicated_tc_count;

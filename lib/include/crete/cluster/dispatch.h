@@ -30,6 +30,7 @@ const auto dispatch_guest_data_dir_name = std::string{"guest-data"};
 const auto dispatch_guest_config_file_name = std::string{"crete-guest-config.serialized"};
 const auto dispatch_log_finish_file_name = std::string{"finish.log"};
 const auto dispatch_log_test_case_tree_file_name = std::string{"test_case_tree.log"};
+const auto dispatch_log_tc_trace_map_file_name = std::string{"tc_trace_map.log"};
 const auto dispatch_log_vm_dir_name = std::string{"vm"};
 const auto dispatch_log_svm_dir_name = std::string{"svm"};
 const auto dispatch_node_error_log_file_name = std::string{"node_error.log"};

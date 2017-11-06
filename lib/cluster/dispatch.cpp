@@ -1343,6 +1343,7 @@ private:
     crete::log::Logger exception_log_;
     crete::log::Logger node_error_log_;
     fs::ofstream target_execution_log_; // TODO: I'd like this to use Logger, but haven't figured out why they all direct to same buffer.
+    fs::ofstream tc_trace_map_log_; // TODO: I'd like this to use Logger, but haven't figured out why they all direct to same buffer.
 
     std::chrono::time_point<std::chrono::system_clock> start_time_ = std::chrono::system_clock::now();
     bool first_{true};
@@ -1515,9 +1516,12 @@ struct DispatchFSM_::init
         fsm.node_error_log_.add_sink(fsm.root_ / log_dir_name / dispatch_node_error_log_file_name);
         fsm.node_error_log_.auto_flush(true);
         fsm.target_execution_log_.open(fsm.root_ / log_dir_name / dispatch_log_vm_dir_name / dispatch_target_execution_log_file_name);
+        fsm.tc_trace_map_log_.open(fsm.root_ / log_dir_name / dispatch_log_tc_trace_map_file_name);
 
         CRETE_EXCEPTION_ASSERT( fsm.target_execution_log_.good()
                               , err::file_open_failed{ dispatch_target_execution_log_file_name } );
+        CRETE_EXCEPTION_ASSERT( fsm.tc_trace_map_log_.good()
+                              , err::file_open_failed{ dispatch_log_tc_trace_map_file_name } );
 
         if(!fsm.options_.test.seeds.empty()) {
             fsm.next_target_seeds_queue_ = std::deque<std::string>{fsm.options_.test.seeds.begin(),
@@ -1626,10 +1630,20 @@ struct DispatchFSM_::dispatch
 
                     if(HANDLED_TRUE == nfsm->process_event(vm::trace{}))
                     {
-                        fsm.to_trace_pool(nfsm->get_trace());
-                        fsm.set_update_time_last_new_tb(nfsm->get_guest_data_post_exec());
+		        auto trace = nfsm->get_trace();
+			auto post_exec_data = nfsm->get_guest_data_post_exec();
+
+                        fsm.to_trace_pool(trace);
+                        fsm.set_update_time_last_new_tb(post_exec_data);
 
                         fsm.target_execution_log_ << nfsm->get_target_execution_log() << std::endl;
+
+                        fsm.tc_trace_map_log_
+                            << "tc-"
+		            << post_exec_data.m_tc_tp_index
+                            << " -> "
+                            << trace.string()
+                            << std::endl;
                     }
                 }
                 else if(nfsm->is_flag_active<vm::flag::tx_test>())
