@@ -216,6 +216,7 @@ struct Dispatch
     Profile profile;
     Coverage coverage;
     std::string file_path;
+    std::string seeds_dir;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version)
@@ -230,6 +231,7 @@ struct Dispatch
         ar & profile;
         ar & coverage;
         ar & file_path;
+        ar & seeds_dir;
     }
 };
 

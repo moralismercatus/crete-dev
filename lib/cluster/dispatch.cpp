@@ -1697,7 +1697,22 @@ struct DispatchFSM_::dispatch
                     fsm.guest_data_ = nfsm->guest_data();
                     fsm.guest_data_.write_guest_config(fsm.root_ / dispatch_guest_data_dir_name / dispatch_guest_config_file_name);
 
-                    if(fsm.options_.test.seeds.empty())
+                    if(!fsm.options_.seeds_dir.empty())
+                    {
+                        auto tcs = std::vector<TestCase>{};
+
+                        for(auto const& f : fs::directory_iterator(fsm.options_.seeds_dir))
+                        {
+                            fs::ifstream ifs(f);
+
+                            assert(ifs.good());
+
+                            tcs.emplace_back(read_test_case(ifs));
+                        }
+
+                        fsm.test_pool_.insert_initial_tcs(tcs);
+                    }
+                    else if(fsm.options_.test.seeds.empty())
                     {
                         if(fsm.options_.vm.initial_tc.get_elements().size() > 0)
                         {

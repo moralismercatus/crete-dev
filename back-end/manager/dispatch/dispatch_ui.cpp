@@ -241,6 +241,13 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
 
     opts.coverage.cmd_path = crete.get<std::string>("coverage", "");
 
+    if(crete.get_child_optional("seeds"))
+    {
+        // auto const& seeds = crete.get_child("seeds");
+
+        opts.seeds_dir = fs::absolute(crete.get<std::string>("seeds", "")).string();
+    }
+
     return opts;
 }
 
