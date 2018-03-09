@@ -21,6 +21,8 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/archive/binary_oarchive.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 
 #include <unistd.h>
 #include <sys/mount.h>
@@ -76,6 +78,7 @@ private:
     fs::path m_exec;
     std::vector<std::string> m_launch_args;
     bp::posix_context m_launch_ctx;
+    bp::posix_context m_launch_ctx_secondary;
 
     fs::path m_sandbox_dir;
     fs::path m_environment;
@@ -96,7 +99,10 @@ public:
     void prime_executable();
     void write_configuration() const;
     void launch_executable();
+    void void_target_pid() const;
     void signal_dump() const;
+
+    void execute_secondary_cmds() const;
 
     void process_func_filter(ProcReader& pr,
                              const config::Functions& funcs,
@@ -104,22 +110,6 @@ public:
     void process_lib_filter(ProcReader& pr,
                             const std::vector<std::string>& libs,
                             void (*f_custom_instr)(uintptr_t, uintptr_t));
-    void process_executable_section(ELFReader& reader,
-                                    const std::vector<std::string>& sections,
-                                    void (*f_custom_instr)(uintptr_t, uintptr_t));
-    void process_call_stack_library_exclusions(ELFReader& er,
-                                               const ProcReader& pr);
-    void process_call_stack_library_exclusions(const ProcReader& pr,
-                                               const std::vector<boost::filesystem::path>& libraries);
-    void process_library_sections(const ProcReader& pr);
-    void process_library_section(ELFReader& reader,
-                                 const std::vector<std::string>& sections,
-                                 void (*f_custom_instr)(uintptr_t, uintptr_t),
-                                 uint64_t base_addr);
-    void process_executable_function_entries(const std::vector<Entry>& entries);
-    void process_library_function_entries(const std::vector<Entry>& entries,
-                                          uint64_t base_addr,
-                                          std::string path);
     fs::path deduce_library(const fs::path& lib,
                             const ProcReader& pr);
 
@@ -505,7 +495,7 @@ void RunnerFSM_::load_defaults(const poll&)
 }
 
 static unsigned monitored_pid = 0;
-static unsigned monitored_timeout = 300;
+static unsigned monitored_timeout = 60;
 
 static void timeout_handler(int signum)
 {
@@ -602,6 +592,9 @@ void RunnerFSM_::setup_launch_exec()
         m_proc_map = fs::path(CRETE_SANDBOX_PATH) / CRETE_PROC_MAPS_PATH;
         m_guest_config_serialized = fs::path(CRETE_SANDBOX_PATH) / CRETE_CONFIG_SERIALIZED_PATH;
     }
+
+    m_launch_ctx_secondary = m_launch_ctx;
+    m_launch_ctx_secondary.environment.insert(bp::environment::value_type(CRETE_ENV_SEC_CMD, "true"));
 
     // 5. setup timeout hanlder
     init_timeout_handler();
@@ -751,6 +744,69 @@ void RunnerFSM_::launch_executable()
 #endif
 }
 
+static bool execute_command_line(const std::string& cmd, const bp::posix_context& ctx)
+ {
+    fprintf(stderr, "executing: %s\n", cmd.c_str());
+
+    bool ret = true;
+
+     std::vector<std::string> args;
+     boost::split(args, cmd, boost::is_any_of(" "), boost::token_compress_on);
+
+     std::string exec = args[0];
+     if(!fs::exists(exec))
+     {
+         exec = bp::find_executable_in_path(exec);
+     }
+
+     if(!fs::exists(exec))
+     {
+         fprintf(stderr, "[CRETE ERROR] [crete-run] command not found: %s\n", exec.c_str());
+         assert(0);
+     }
+
+     bp::posix_child c = bp::posix_launch(exec, args, ctx);
+
+     monitored_pid = c.get_id();
+     assert(monitored_timeout != 0);
+     alarm(monitored_timeout);
+
+     bp::status s = c.wait();
+
+     alarm(0);
+
+     if(!(s.exited() && (s.exit_status() == 0)))
+     {
+         ret = false;
+     }
+
+     return ret;
+}
+
+void RunnerFSM_::execute_secondary_cmds() const
+{
+    const std::vector<std::string>& cmds = guest_config_.get_secondary_cmds();
+    fprintf(stderr, "sec_cmds.size() = %lu\n", cmds.size());
+
+    for(std::vector<std::string>::const_iterator it = cmds.begin();
+            it != cmds.end(); ++it) {
+        bool cmd_executed = execute_command_line(*it, m_launch_ctx_secondary);
+        if(!cmd_executed)
+        {
+            fprintf(stderr, "[CRETE Warning][crete-run] \'%s\' executed unsuccessfully.\n", it->c_str());
+        }
+
+        void_target_pid();
+    }
+}
+
+void RunnerFSM_::void_target_pid() const
+{
+#if !defined(CRETE_TEST)
+    crete_void_target_pid();
+#endif // !defined(CRETE_TEST)
+}
+
 void RunnerFSM_::signal_dump() const
 {
 #if !defined(CRETE_TEST)
@@ -807,9 +863,10 @@ void RunnerFSM_::execute(const next_test&)
     }
 
 #if !defined(CRETE_TEST)
-
     launch_executable();
+    void_target_pid();
 
+    execute_secondary_cmds();
 #endif // !defined(CRETE_TEST)
 }
 
@@ -1206,82 +1263,6 @@ void RunnerFSM_::process_lib_filter(ProcReader& pr,
         {
             f_custom_instr(pmiter->address().first, pmiter->address().second);
         }
-    }
-}
-
-void RunnerFSM_::process_executable_section(ELFReader& reader,
-                                            const std::vector<std::string>& sections,
-                                            void (*f_custom_instr)(uintptr_t, uintptr_t))
-{
-    for(std::vector<std::string>::const_iterator iter = sections.begin();
-        iter != sections.end();
-        ++iter)
-    {
-        Entry entry = reader.get_section(*iter);
-
-        if(entry.addr == 0)
-            continue;//throw std::runtime_error("failed to get address of '" + *iter + "' - ensure binary has section");
-
-        f_custom_instr(entry.addr, entry.addr + entry.size);
-    }
-}
-
-void RunnerFSM_::process_library_sections(const ProcReader& pr)
-{
-#if !defined(CRETE_TEST)
-
-    using namespace std;
-
-    const vector<ProcMap> proc_maps = pr.find_all();
-
-    set<string> lib_paths;
-    for(vector<ProcMap>::const_iterator it = proc_maps.begin();
-        it != proc_maps.end();
-        ++it)
-    {
-        if(fs::exists(it->path()))
-        {
-            lib_paths.insert(it->path());
-        }
-    }
-
-    for(set<string>::const_iterator it = lib_paths.begin();
-        it != lib_paths.end();
-        ++it)
-    {
-        string path = *it;
-
-        vector<ProcMap> pms = pr.find(path);
-
-        ELFReader ereader(path);
-
-        uint64_t base_addr = pms.front().address().first;
-
-        process_library_section(ereader,
-                                guest_config_.get_section_exclusions(),
-                                crete_insert_instr_call_stack_exclude,
-                                base_addr);
-    }
-
-#endif // !defined(CRETE_TEST)
-}
-
-void RunnerFSM_::process_library_section(ELFReader& reader,
-                                         const std::vector<std::string>& sections,
-                                         void (*f_custom_instr)(uintptr_t, uintptr_t),
-                                         uint64_t base_addr)
-{
-    for(std::vector<std::string>::const_iterator iter = sections.begin();
-        iter != sections.end();
-        ++iter)
-    {
-        Entry entry = reader.get_section(*iter);
-
-        if(entry.addr == 0)
-            continue;//throw std::runtime_error("failed to get address of '" + *iter + "' - ensure binary has section");
-
-        f_custom_instr(entry.addr + base_addr,
-                       entry.addr + base_addr + entry.size);
     }
 }
 

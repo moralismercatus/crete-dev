@@ -231,16 +231,23 @@ static inline void crete_preload_initialize(int argc, char**& argv)
 {
     fprintf(stderr, "crete_preload_initialize() entered\n");
 
-    // Should terminate program while being launched as prime
-    update_proc_maps();
+    int is_sec_cmd = std::getenv(CRETE_ENV_SEC_CMD)? 1:0;
+    fprintf(stderr, "is_sec_cmd = %d\n", is_sec_cmd);
 
-    atexit(crete_capture_end);
-    // Need to call crete_capture_begin before make_concolics, or they won't be captured.
-    crete_capture_begin();
+    if(!is_sec_cmd)
+    {
+        // Should terminate program while being launched as prime
+        update_proc_maps();
+    }
 
-    config::HarnessConfiguration hconfig = crete_load_configuration();
-    crete_process_configuration(hconfig, argc, argv);
+    // Need to call crete_send_target_pid before make_concolics, or they won't be captured.
+    crete_send_target_pid();
 
+    if(!is_sec_cmd)
+    {
+        config::HarnessConfiguration hconfig = crete_load_configuration();
+        crete_process_configuration(hconfig, argc, argv);
+    }
     fprintf(stderr, "crete_preload_initialize() finished\n");
 }
 
@@ -264,8 +271,7 @@ static inline void crete_preload_initialize(int argc, char**& argv)
 // TODO: xxx does not handle nested signals
 static inline void crete_signal_handler(int signum)
 {
-    //TODO: xxx _exit() is safer, but atexit()/crete_capture_end() will not be called with _exit()
-    exit(CRETE_EXIT_CODE_SIG_BASE + signum);
+    _exit(CRETE_EXIT_CODE_SIG_BASE + signum);
 }
 
 static inline void init_crete_signal_handlers(void)
@@ -338,6 +344,7 @@ int __libc_start_main(
         if(orig_libc_start_main == 0)
             throw runtime_error("failed to find __libc_start_main");
 
+        setpgrp();
         init_crete_signal_handlers();
         crete_preload_initialize(argc, ubp_av);
     }

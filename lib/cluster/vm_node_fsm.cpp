@@ -139,6 +139,7 @@ public:
     auto pwd() -> const fs::path&;
     auto guest_data() -> const GuestData&;
     auto get_guest_data_post_exec() -> const GuestDataPostExec&;
+    auto initial_test() -> const TestCase&;
     auto target_execution_log() -> const std::string&;
     auto last_test_case() -> const TestCase&;
     auto error() -> const log::NodeError&;
@@ -281,6 +282,7 @@ private:
     std::shared_ptr<Server> server_{std::make_shared<Server>()}; // Ctor acquires unique port.
     bool first_vm_{false};
     GuestData guest_data_;
+    TestCase initial_test_;
     TestCase last_test_case_;
     boost::thread start_vm_thread_;
     std::string target_;
@@ -288,7 +290,13 @@ private:
     log::NodeError error_log_;
     std::string target_execution_log_;
 
+    std::chrono::time_point<std::chrono::system_clock> test_start_time_;
+    uint64_t test_timeout_duration_{600}; //Note: xxx this timeout should be longer than the timeout set in crete-run
+    bool is_test_timeout_{false};
+
     std::shared_ptr<GuestDataPostExec> guest_data_post_exec_{std::make_shared<GuestDataPostExec>()};
+
+    std::shared_ptr<AtomicGuard<pid_t> > translator_child_pid_ = std::make_shared<AtomicGuard<pid_t> >(-1);
 
     // Testing
     boost::thread qemu_stream_capture_thread_;
@@ -336,7 +344,8 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
     // Cont: I could ad hoc it by keeping a history_ variable that I append to for each state, and condense to the last N.
     // Cont: history_ could be stored using boost::circular_buffer, or std::vector with a mod operator, to keep it's size down to N.
 
-    if(dispatch_options_.mode.distributed)
+    if(dispatch_options_.mode.distributed
+            && !fsm.is_test_timeout_) // FIXME: xxx "child_->acquire()->get_stdout().rdbuf()" will cause deadlock when child is not killed
     {
         auto c = child_->acquire();
 
@@ -358,18 +367,13 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
            << c->get_stdout().rdbuf();
     }
 
+    fsm.is_test_timeout_ = false;
+
+
     if(dynamic_cast<VMException*>(&e))
     {
-        if(dynamic_cast<VMNoRecoveryException*>(&e))
-        {
-            std::cerr << "VMNoRecoveryException thrown.\n";
-            fsm.process_event(ev::terminate{});
-        }
-        else
-        {
-            std::cerr << "VMException thrown.\n";
-            fsm.process_event(ev::error{});
-        }
+        std::cerr << "VMException thrown.\n";
+        fsm.process_event(ev::error{});
     }
     else
     {
@@ -409,15 +413,15 @@ auto QemuFSM_:: get_guest_data_post_exec() -> const GuestDataPostExec&
 }
 
 inline
-auto QemuFSM_::target_execution_log() -> const std::string&
-{
-    return target_execution_log_;
-}
-
-inline
 auto QemuFSM_::image_info() const -> ImageInfo
 {
     return ImageInfo{image_path()};
+}
+
+inline
+auto QemuFSM_::target_execution_log() -> const std::string&
+{
+    return target_execution_log_;
 }
 
 inline
@@ -436,6 +440,12 @@ inline
 auto QemuFSM_::guest_data() -> const GuestData&
 {
     return guest_data_;
+}
+
+inline
+auto QemuFSM_::initial_test() -> const TestCase&
+{
+    return initial_test_;
 }
 
 inline
@@ -831,6 +841,7 @@ struct QemuFSM_::start_test
         {
             fsm.server_->write(0,
                                packet_type::cluster_next_test);
+            fsm.test_start_time_ = std::chrono::system_clock::now();
         }
         catch(std::exception& e)
         {
@@ -839,6 +850,96 @@ struct QemuFSM_::start_test
     }
 };
 
+static void translate_trace(const fs::path& trace_dir
+        ,const cluster::option::Dispatch& dispatch_options
+        ,const option::VMNode& node_options
+        ,std::shared_ptr<AtomicGuard<pid_t>> child_pid)
+{
+    fs::path dir = trace_dir;
+    fs::path kdir = dir / klee_dir_name;
+
+    if(!fs::exists(dir))
+    {
+        BOOST_THROW_EXCEPTION(VMException{} << err::file_missing{dir.string()});
+    }
+
+    // 1. Translate qemu-ir to llvm
+    bp::context ctx;
+    ctx.work_directory = dir.string();
+    ctx.environment = bp::self::get_environment();
+    ctx.stdout_behavior = bp::capture_stream();
+    ctx.stderr_behavior = bp::redirect_stream_to_stdout();
+
+    {
+        auto exe = std::string{};
+
+        if(dispatch_options.vm.arch == "x86")
+        {
+            if(!node_options.translator.path.x86.empty())
+            {
+                exe = node_options.translator.path.x86;
+            }
+            else
+            {
+                exe = bp::find_executable_in_path("crete-llvm-translator-qemu-2.3-i386");
+            }
+        }
+        else if(dispatch_options.vm.arch == "x64")
+        {
+            if(!node_options.translator.path.x64.empty())
+            {
+                exe = node_options.translator.path.x64;
+            }
+            else
+            {
+                exe = bp::find_executable_in_path("crete-llvm-translator-qemu-2.3-x86_64");
+            }
+        }
+        else
+        {
+            BOOST_THROW_EXCEPTION(Exception{} << err::arg_invalid_str{dispatch_options.vm.arch}
+            << err::arg_invalid_str{"vm.arch"});
+        }
+
+        auto args = std::vector<std::string>{fs::absolute(exe).string()}; // It appears our modified QEMU requires full path in argv[0]...
+
+        auto proc = bp::launch(exe, args, ctx);
+
+        child_pid->acquire() = proc.get_id();
+
+        // TODO: xxx Work-around to resolve the deadlock happened within the child process
+        // when its output is redirected.
+        auto& pistream = proc.get_stdout();
+        std::stringstream ss;
+        std::string line;
+
+        while(std::getline(pistream, line))
+            ss << line;
+
+        auto status = proc.wait();
+
+        // FIXME: xxx Between 'auto status = proc.wait();' and this statement,
+        //           there is a chance this pid is reclaimed by other process.
+        child_pid->acquire() = -1;
+
+        if(!process::is_exit_status_zero(status))
+        {
+            BOOST_THROW_EXCEPTION(VMException{} << err::process_exit_status{exe}
+            << err::msg{ss.str()});
+        }
+
+        fs::rename(dir / "dump_llvm_offline.bc",
+                dir / "run.bc");
+
+        for( fs::directory_iterator dir_iter(dir), end_iter ; dir_iter != end_iter ; ++dir_iter)
+        {
+            std::string filename = dir_iter->path().filename().string();
+            if(filename.find("dump_tcg_llvm_offline") != std::string::npos)
+                fs::remove(dir/filename);
+        }
+    }
+}
+
 struct QemuFSM_::store_trace
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
@@ -846,7 +947,10 @@ struct QemuFSM_::store_trace
     {
         ts.async_task_.reset(new AsyncTask{[](const fs::path vm_dir,
                                               std::shared_ptr<fs::path> trace,
-                                              std::shared_ptr<GuestDataPostExec> guest_data_post_exec)
+                                              std::shared_ptr<GuestDataPostExec> guest_data_post_exec,
+                                              const cluster::option::Dispatch dispatch_options,
+                                              const node::option::VMNode node_options,
+                                              std::shared_ptr<AtomicGuard<pid_t>> child_pid)
         {
             auto trace_ready = vm_dir / hostfile_dir_name / trace_ready_name;
             auto trace_dir = vm_dir / trace_dir_name;
@@ -891,9 +995,16 @@ struct QemuFSM_::store_trace
 
             *guest_data_post_exec = read_serialized_guest_data_post_exec((*trace) / CRETE_FILENAME_GUEST_DATA_POST_EXEC);
 
-            fs::remove(trace_ready);
+            translate_trace(*trace, dispatch_options, node_options,child_pid);
 
-        }, fsm.vm_dir_, fsm.trace_, fsm.guest_data_post_exec_});
+            fs::remove(trace_ready);
+        }
+        , fsm.vm_dir_
+        , fsm.trace_
+        , fsm.guest_data_post_exec_
+        , fsm.dispatch_options_
+        , fsm.node_options_
+        , fsm.translator_child_pid_});
     }
 };
 
@@ -925,7 +1036,7 @@ struct QemuFSM_::connect_vm
             {
                 BOOST_THROW_EXCEPTION(VMException{} << err::process_exited{"pid_"});
             }
-            
+
             auto new_port = server->port();
 
             std::cout << "new_port: " << new_port << std::endl;
@@ -993,7 +1104,6 @@ struct QemuFSM_::connect_vm
             {
                 BOOST_THROW_EXCEPTION(VMException{} << err::msg{boost::diagnostic_information(e)});
             }
-
 
             // TODO: As I don't need to send the guest config for every instance (they're all the same),
             //       do I actually need this? Only for the first instance to run.
@@ -1113,6 +1223,11 @@ struct QemuFSM_::is_vm_terminated
     }
 };
 
+static inline uint64_t eplapsed_time_in_second(const std::chrono::time_point<std::chrono::system_clock> &start_time)
+{
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - start_time).count();;
+}
+
 struct QemuFSM_::is_finished
 {
     template <class EVT,class FSM,class SourceState,class TargetState>
@@ -1123,6 +1238,10 @@ struct QemuFSM_::is_finished
         if(!process::is_running(pid)) // TODO: this covers the case where the VM died, but what about crete-run?
         {
             BOOST_THROW_EXCEPTION(VMException{} << err::process_exited{"pid_"});
+        } else if (eplapsed_time_in_second(fsm.test_start_time_) > fsm.test_timeout_duration_) {
+            fsm.is_test_timeout_ = true;
+            BOOST_THROW_EXCEPTION(VMException{} <<
+                    err::msg{"timeout in vm-node-fsm for a test, likely to be crete-run crash"});
         }
 
         auto trace_ready_sig = fsm.vm_dir_ / hostfile_dir_name / trace_ready_name;
