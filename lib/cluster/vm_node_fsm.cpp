@@ -372,8 +372,16 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
 
     if(dynamic_cast<VMException*>(&e))
     {
-        std::cerr << "VMException thrown.\n";
-        fsm.process_event(ev::error{});
+        if(dynamic_cast<VMNoRecoveryException*>(&e))
+        {
+            std::cerr << "VMNoRecoveryException thrown.\n";
+            fsm.process_event(ev::terminate{});
+        }
+        else
+        {
+            std::cerr << "VMException thrown.\n";
+            fsm.process_event(ev::error{});
+        }
     }
     else
     {

@@ -6,21 +6,13 @@ include(ExternalProject)
 
 ExternalProject_Add(
 	boost
-
-	SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/boost-prefix/src/boost_1_59_0
-	BUILD_IN_SOURCE 1
-
 	DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}
-	URL ${CMAKE_CURRENT_SOURCE_DIR}/boost_1_59_0.tar.bz2
-	URL_MD5 6162bc9360fcae874c72d8b80d68df68
+	URL ${CMAKE_CURRENT_SOURCE_DIR}/boost.src.tar.bz2
 	UPDATE_COMMAND ""
-
-	CONFIGURE_COMMAND
-	./bootstrap.sh --with-libraries=chrono,context,filesystem,program_options,regex,serialization,thread
-
-	BUILD_COMMAND ./b2 -j7 
-
-	INSTALL_COMMAND ln -sf ${CMAKE_CURRENT_BINARY_DIR}/boost-prefix/src/boost_1_59_0/stage/lib ${CMAKE_BINARY_DIR}/bin/boost
+	BUILD_IN_SOURCE 1
+	CONFIGURE_COMMAND ./bootstrap.sh --includedir=${CMAKE_SOURCE_DIR}/lib/include --libdir=${CMAKE_BINARY_DIR}/bin --with-libraries=chrono,context,filesystem,program_options,regex,serialization,thread
+	BUILD_COMMAND ./b2 -j7 install
+	INSTALL_COMMAND ""
 	)
 
 
