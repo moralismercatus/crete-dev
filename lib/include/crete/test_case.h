@@ -19,7 +19,17 @@ namespace crete
         uint32_t name_size;
         std::vector<uint8_t> name;
         uint32_t data_size;
+        uint32_t useful_data_size;
         std::vector<uint8_t> data;
+
+        TestCaseElement()
+            : name_size(0)
+            , name()
+            , data_size(0)
+            , useful_data_size(0)
+            , data()
+        {
+        }
 
         template <typename Archive>
         void serialize(Archive& ar, const unsigned int version)
@@ -30,6 +40,7 @@ namespace crete
             ar & name;
             ar & data_size;
             ar & data;
+            ar & useful_data_size;
         }
 
 #if !defined(CRETE_TC_COMPARE_H)
@@ -38,14 +49,18 @@ namespace crete
             return  name_size == other.name_size &&
                     name == other.name &&
                     data_size == other.data_size &&
-                    data == other.data;
+                    data == other.data &&
+                    useful_data_size == other.useful_data_size;
         }
 #endif
 
         friend std::size_t hash_value(TestCaseElement const& i)
         {
-            return boost::hash_value(string(i.name.begin(), i.name.end())  +
-                                     string(i.data.begin(), i.data.end()));
+            std::size_t seed = 0;
+            boost::hash_combine(seed, string(i.name.begin(), i.name.end()) +
+                                      string(i.data.begin(), i.data.end()));
+            boost::hash_combine(seed, i.useful_data_size);
+            return seed;
         }
 
         void print() const;
@@ -88,6 +103,7 @@ namespace crete
 
         void add_element(const TestCaseElement& e) { elems_.push_back(e); }
 
+        TestCaseElements& get_elements() { return elems_; }
         const TestCaseElements& get_elements() const { return elems_; }
         void set_elements(const TestCaseElements &elems) {elems_ = elems;}
         void write(std::ostream& os) const;

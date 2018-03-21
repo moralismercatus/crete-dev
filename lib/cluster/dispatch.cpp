@@ -59,6 +59,7 @@ auto register_node_fsm(NodeRegistrar::Node& node,
                        AtomicGuard<std::vector<std::shared_ptr<svm::NodeFSM>>>& svm_node_fsms) -> void;
 auto make_dispatch_root() -> boost::filesystem::path;
 auto extract_initial_test(const config::RunConfiguration& config) -> TestCase;
+auto unify(std::vector<TestCase>& tcs) -> void;
 
 namespace vm
 {
@@ -1699,16 +1700,9 @@ struct DispatchFSM_::dispatch
 
                     if(!fsm.options_.seeds_dir.empty())
                     {
-                        auto tcs = std::vector<TestCase>{};
+                        auto tcs = retrieve_tests(fsm.options_.seeds_dir);
 
-                        for(auto const& f : fs::directory_iterator(fsm.options_.seeds_dir))
-                        {
-                            fs::ifstream ifs(f);
-
-                            assert(ifs.good());
-
-                            tcs.emplace_back(read_test_case(ifs));
-                        }
+                        unify(tcs);
 
                         fsm.test_pool_.insert_initial_tcs(tcs);
                     }
@@ -2794,6 +2788,56 @@ auto extract_initial_test(const config::RunConfiguration& config) -> TestCase
     }
 
     return tc;
+}
+
+auto unify(std::vector<TestCase>& tcs) -> void
+{
+    auto upper_bounds = std::unordered_map<std::string,
+                                           uint32_t>{};
+    auto elem_count = 0u;
+
+    for(const auto& tc : tcs)
+    {
+        auto elems = tc.get_elements();
+
+        if(elem_count == 0u)
+        {
+            elem_count =  elems.size();
+        }
+
+        CRETE_EXCEPTION_ASSERT(elem_count == elems.size(),
+                               err::parse{"element count inconsistent across seed TCs"});
+
+        for(const auto& e : elems)
+        {
+            auto name = std::string{e.name.begin(), e.name.end()};
+
+            if(upper_bounds.count(name) == 0)
+            {
+                upper_bounds.emplace(name, e.data_size);
+            }
+            else
+            {
+                auto& eub = upper_bounds[name];
+                eub = std::max(eub, e.data_size);
+            }
+        }
+    }
+
+    for(auto&& tc : tcs)
+    {
+        auto& elems = tc.get_elements();
+
+        for(auto&& e : elems)
+        {
+            auto name = std::string{e.name.begin(), e.name.end()};
+            auto eub = upper_bounds[name];
+            
+            e.useful_data_size = e.data_size;
+            e.data.resize(eub);
+            e.data_size = eub;
+        }
+    }
 }
 
 } // namespace cluster
