@@ -613,7 +613,11 @@ void HarnessConfiguration::load_file(const boost::property_tree::ptree& config_t
         }
     }
 
-    assert(file.size != 0);
+    // If size is 0, treat as concrete.
+    if(file.size == 0)
+    {
+        file.concolic = false;
+    }
 
     files_.push_back(file);
 
