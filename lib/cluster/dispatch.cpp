@@ -1358,6 +1358,7 @@ private:
     fs::ofstream tc_trace_map_log_; // TODO: I'd like this to use Logger, but haven't figured out why they all direct to same buffer.
 
     std::chrono::time_point<std::chrono::system_clock> start_time_ = std::chrono::system_clock::now();
+    uint64_t last_display_status_time_ = 0u;
     bool first_{true};
     std::deque<std::string> next_target_queue_;
     std::deque<std::string> next_target_seeds_queue_;
@@ -1821,9 +1822,12 @@ struct DispatchFSM_::dispatch
 
         fsm.first_ = false;
 
-        if(fsm.options_.report.status)
+        if( fsm.options_.report.status
+         && fsm.elapsed_time() > fsm.last_display_status_time_ )
         {
             fsm.display_status(std::cout);
+
+            fsm.last_display_status_time_ = fsm.elapsed_time();
         }
 
         fsm.write_statistics();
@@ -2107,7 +2111,9 @@ auto DispatchFSM_::set_update_time_last_new_tb(const GuestDataPostExec& data) ->
     {
         update_time_last_new_tb_ = std::chrono::system_clock::now();
 
+#if defined(CRETE_DEBUG)
         cerr << "update_time_last_new_tb_ is updated\n";
+#endif // defined(CRETE_DEBUG)
     }
 }
 

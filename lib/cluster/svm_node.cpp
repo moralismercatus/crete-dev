@@ -181,7 +181,6 @@ auto process(AtomicGuard<SVMNode>& node,
         return true;
     }
     case packet_type::cluster_trace:
-        std::cout << "cluster_trace" << std::endl;
         receive_trace(node,
                       request.sbuf_,
                       request.client_);
