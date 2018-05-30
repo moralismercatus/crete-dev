@@ -10,6 +10,7 @@
 #include <crete/async_task.h>
 #include <crete/logger.h>
 #include <crete/guest_data_post_exec.hpp>
+#include <crete/timer.hpp>
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -684,6 +685,8 @@ struct QemuFSM_::update_image
         ts.async_task_.reset(new AsyncTask{[](const fs::path new_image,
                                               const fs::path old_image)
         {
+            CRETE_TIME_SCOPE( "Updating local VM image" );
+
             fs::copy_file(new_image,
                           old_image,
                           fs::copy_option::overwrite_if_exists);
@@ -710,6 +713,8 @@ struct QemuFSM_::start_vm
                                               const cluster::option::Dispatch dispatch_options,
                                               const node::option::VMNode node_options)
         {
+            CRETE_TIME_SCOPE( "Starting VM" );
+
             bp::context ctx;
             ctx.work_directory = vm_dir.string();
             ctx.environment = bp::self::get_environment();
@@ -1037,6 +1042,8 @@ struct QemuFSM_::connect_vm
                                               std::shared_ptr<AtomicGuard<bp::child>> child,
                                               const fs::path test_target_archive)
         {
+            CRETE_TIME_SCOPE( "Connecting to VM" );
+
             auto lock = child->acquire();
             auto pid = lock->get_id();
 
@@ -1139,6 +1146,8 @@ struct QemuFSM_::receive_guest_info
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> void
     {
+        CRETE_TIME_SCOPE( "Receiving guest info from VM" );
+
         try
         {
             // Perform any work needed only by the first VM instance s.a. grabbing the guest config, any debug info.

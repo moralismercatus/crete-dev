@@ -3,6 +3,7 @@
 #include <crete/logger.h>
 #include <crete/async_task.h>
 #include <crete/guest_data_post_exec.hpp>
+#include <crete/timer.hpp>
 
 #include <boost/property_tree/ptree.hpp>
 #include <boost/filesystem.hpp>
@@ -550,6 +551,8 @@ struct VMNodeFSM_::tx_config
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
     {
+        CRETE_TIME_SCOPE( "Transmitting options to vm-node" );
+
         transmit_config(fsm.node_,
                         ev.options_);
     }
@@ -564,6 +567,8 @@ struct VMNodeFSM_::tx_test_archive
         ts.async_task_.reset(new AsyncTask{[]( NodeRegistrar::Node node
                                              , const fs::path archive)
         {
+            CRETE_TIME_SCOPE( "Transmitting test archive to vm-node" );
+
             if(!archive.empty())
             {
                 CRETE_EXCEPTION_ASSERT(fs::exists(archive),
@@ -597,6 +602,8 @@ struct VMNodeFSM_::update_image_info
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const& ev, FSM& fsm, SourceState&, TargetState&) -> void
     {
+        CRETE_TIME_SCOPE( "Transmitting OS image info to vm-node" );
+
         transmit_image_info(fsm.node_,
                             ImageInfo{ev.image_path_});
     }
@@ -610,6 +617,8 @@ struct VMNodeFSM_::update_image
         ts.async_task_.reset(new AsyncTask{[]( NodeRegistrar::Node node
                                              , const fs::path image_path)
         {
+            CRETE_TIME_SCOPE( "Transmitting OS image to vm-node" );
+
             if(!fs::exists(image_path))
             {
                 BOOST_THROW_EXCEPTION(Exception{} << err::file_missing{image_path.string()});
@@ -1131,6 +1140,8 @@ struct SVMNodeFSM_::commence
     template <class EVT,class FSM,class SourceState,class TargetState>
     auto operator()(EVT const&, FSM& fsm, SourceState&, TargetState&) -> void
     {
+        CRETE_TIME_SCOPE( "Signaling vm-node to commence" );
+
         transmit_commencement(fsm.node_);
     }
 };
@@ -1631,8 +1642,8 @@ struct DispatchFSM_::dispatch
 
                     if(HANDLED_TRUE == nfsm->process_event(vm::trace{}))
                     {
-		        auto trace = nfsm->get_trace();
-			auto post_exec_data = nfsm->get_guest_data_post_exec();
+                        auto trace = nfsm->get_trace();
+                        auto post_exec_data = nfsm->get_guest_data_post_exec();
 
                         fsm.to_trace_pool(trace);
                         fsm.set_update_time_last_new_tb(post_exec_data);
@@ -1641,7 +1652,7 @@ struct DispatchFSM_::dispatch
 
                         fsm.tc_trace_map_log_
                             << "tc-"
-		            << post_exec_data.m_tc_tp_index
+                            << post_exec_data.m_tc_tp_index
                             << " -> "
                             << trace.string()
                             << std::endl;
