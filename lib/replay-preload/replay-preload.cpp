@@ -2,8 +2,10 @@
 #include <crete/exception.h>
 #include <crete/test_case.h>
 #include <crete/harness_config.h>
+#include <crete/tc-replay.h>
 
 #include <boost/filesystem.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 
 #include <signal.h>
 #include <dlfcn.h>
@@ -48,6 +50,9 @@ private:
 
     config::HarnessConfiguration m_guest_config;
     map<string, TestCaseElement> m_current_tc;
+    string m_cocnolic_name_suffix;
+
+    CheckExploitable m_ck_exp;
 
 public:
     CreteReplayPreload(int argc, char **argv);
@@ -56,6 +61,8 @@ public:
     void setup_concolic_args();
     void setup_concolic_files();
     void setup_concolic_stdin();
+
+    void write_ck_exp();
 
 private:
     void init_guest_config();
@@ -68,6 +75,12 @@ CreteReplayPreload::CreteReplayPreload(int argc, char **argv):
 {
     init_guest_config();
     init_current_tc();
+
+    char *p = getenv(CRETE_CONCOLIC_NAME_SUFFIX);
+    if(p)
+    {
+        m_cocnolic_name_suffix = string(p);
+    }
 }
 
 void CreteReplayPreload::init_guest_config()
@@ -120,8 +133,6 @@ void CreteReplayPreload::init_current_tc()
 // Replace the value of conoclic argument with the values from test case
 void CreteReplayPreload::setup_concolic_args()
 {
-    cerr << "setup_concolic_args()\n";
-
     const config::Arguments& guest_config_args = m_guest_config.get_arguments();
 
     // Replace the value of conoclic argument with the values from test case
@@ -132,7 +143,7 @@ void CreteReplayPreload::setup_concolic_args()
             assert(it->index < m_argc);
 
             stringstream concolic_name;
-            concolic_name << "argv_" << it->index;
+            concolic_name << "argv_" << it->index << m_cocnolic_name_suffix;
 
             map<string, TestCaseElement>::iterator it_current_tc_arg =
                     m_current_tc.find(concolic_name.str());
@@ -156,44 +167,6 @@ void CreteReplayPreload::setup_concolic_args()
     }
 }
 
-TestCaseElement select_file(const TestCaseElement& lhs,
-        const TestCaseElement& rhs)
-{
-    assert(lhs.data.size() == rhs.data.size());
-
-    std::vector<uint8_t> zero_v(lhs.data.size(), 0);
-
-    bool lhs_z = (lhs.data == zero_v);
-    bool rhs_z = (rhs.data == zero_v);
-
-    assert((lhs_z || rhs_z) &&
-            "[crete-replay-preload Error] Both symfile-libc and symfile-posix are not empty.");
-
-    // Both of them are blank
-    if(lhs_z && rhs_z)
-    {
-        fprintf(stderr, "[select_file] Both %s and %s are empty\n",
-                string(lhs.name.begin(), lhs.name.end()).c_str(),
-                string(rhs.name.begin(), rhs.name.end()).c_str());
-
-        return lhs;
-    }
-
-    if(!lhs_z){
-        fprintf(stderr, "[select_file] Only %s is not empty\n",
-                string(lhs.name.begin(), lhs.name.end()).c_str());
-
-        return lhs;
-    } else {
-        assert(!rhs_z);
-
-        fprintf(stderr, "[select_file] Only %s is not empty\n",
-                string(rhs.name.begin(), rhs.name.end()).c_str());
-
-        return rhs;
-    }
-}
-
 // Generate a concrete file with the content of conoclic file in test case
 // Also, adjust the command-line input to make sure the file name specified in
 // argv is consistent with the file we generated here
@@ -207,21 +180,16 @@ void CreteReplayPreload::setup_concolic_files()
         if(it->concolic)
         {
             // 1. Get concolic file data
-            string filename = it->path.filename().string();
+            string filename = it->path.filename().string() + m_cocnolic_name_suffix;
 
             map<string, TestCaseElement>::iterator it_file_libc=
                     m_current_tc.find(filename);
-            map<string, TestCaseElement>::iterator it_file_posix=
-                    m_current_tc.find(filename + "-posix");
             assert(it_file_libc!= m_current_tc.end());
-            assert(it_file_posix != m_current_tc.end());
 
             TestCaseElement file_libc= it_file_libc->second;
-            TestCaseElement file_posix = it_file_posix->second;
             m_current_tc.erase(it_file_libc);
-            m_current_tc.erase(it_file_posix);
 
-            TestCaseElement selected_file = select_file(file_libc, file_posix);
+            TestCaseElement selected_file = file_libc;
 
             // 2. Write out concolic
             string output_filename = "crete.replay." + string(selected_file.name.begin(), selected_file.name.end());
@@ -238,8 +206,7 @@ void CreteReplayPreload::setup_concolic_files()
             bool found = false;
             for(config::Arguments::iterator arg_it = guest_config_args.begin();
                     arg_it != guest_config_args.end(); ++arg_it) {
-                if(it->path.string().find(arg_it->value) != string::npos) {
-                    assert(it->path.filename().string() == fs::path(arg_it->value).filename().string());
+                if(it->path.filename().string() == fs::path(arg_it->value).filename().string()) {
                     assert(arg_it->index < m_argc);
                     assert(!arg_it->concolic && "Symbolic file content with symbolic file path\n");
 
@@ -255,10 +222,14 @@ void CreteReplayPreload::setup_concolic_files()
             }
 
             assert(found);
+
+            m_ck_exp.m_files.push_back(output_filename);
         } else {
             // sanity check
             assert(fs::exists(it->path) && fs::is_regular_file(it->path));
             assert(fs::file_size(it->path) == it->size);
+
+            m_ck_exp.m_files.push_back(it->path.string());
         }
     }
 }
@@ -278,18 +249,13 @@ void CreteReplayPreload::setup_concolic_stdin()
         {
             // 1. Get concolic file data
             map<string, TestCaseElement>::iterator it_stdin_libc=
-                    m_current_tc.find("crete-stdin");
-            map<string, TestCaseElement>::iterator it_stdin_posix=
-                    m_current_tc.find("crete-stdin-posix");
+                    m_current_tc.find("crete-stdin" + m_cocnolic_name_suffix);
             assert(it_stdin_libc!= m_current_tc.end());
-            assert(it_stdin_posix != m_current_tc.end());
 
             TestCaseElement stdin_libc= it_stdin_libc->second;
-            TestCaseElement stdin_posix = it_stdin_posix->second;
             m_current_tc.erase(it_stdin_libc);
-            m_current_tc.erase(it_stdin_posix);
 
-            TestCaseElement selected_stdin= select_file(stdin_libc, stdin_posix);
+            TestCaseElement selected_stdin= stdin_libc;
 
             // 2. Write out concolic stdin
             assert(selected_stdin.data.size() == selected_stdin.data_size);
@@ -306,6 +272,30 @@ void CreteReplayPreload::setup_concolic_stdin()
             fprintf(stderr, "Error: Redirect stdin to %s by freopen() failed.\n",
                     replay_stdin_filename.c_str());
         }
+    }
+}
+
+void CreteReplayPreload::write_ck_exp()
+{
+    m_ck_exp.m_p_launch = fs::current_path().string();
+    m_ck_exp.m_p_exec = fs::canonical(m_argv[0]).string();
+    for(uint64_t i = 0; i < m_argc; ++i)
+    {
+        m_ck_exp.m_args.push_back(string(m_argv[i]));
+    }
+
+    m_ck_exp.m_stdin_file = replay_stdin_filename;
+
+    try {
+        ofstream ofs(CRETE_TC_REPLAY_CK_EXP_INFO, ios_base::binary);
+        boost::archive::binary_oarchive oa(ofs);
+        oa << m_ck_exp;
+        ofs.close();
+    }
+    catch(std::exception &e) {
+        cerr << e.what() << endl;
+        BOOST_THROW_EXCEPTION(crete::Exception()
+        << err::msg("[crete-replay-preload] serialization error for writing ck_exp"));
     }
 }
 
@@ -372,7 +362,7 @@ int __libc_start_main(
         void (*fini) (void),
         void (*rtld_fini) (void),
         void *stack_end) {
-    fprintf(stderr, "[replay-prealod] prog: %s\n", ubp_av[0]);
+    fprintf(stderr, "[replay-preload] prog: %s\n", ubp_av[0]);
 
     __libc_start_main_t orig_libc_start_main;
 
@@ -386,11 +376,13 @@ int __libc_start_main(
             BOOST_THROW_EXCEPTION(crete::Exception() << crete::err::msg("failed to find __libc_start_main"));
         }
 
+        setpgrp();
         init_crete_signal_handlers(argc, ubp_av);
         crete::CreteReplayPreload crete_replay_preload(argc, ubp_av);
         crete_replay_preload.setup_concolic_args();
         crete_replay_preload.setup_concolic_files();
         crete_replay_preload.setup_concolic_stdin();
+        crete_replay_preload.write_ck_exp();
     }
     catch(...)
     {
@@ -401,7 +393,13 @@ int __libc_start_main(
 
     for(int i = 0; i < argc; ++i)
     {
-        cout << "argv[" << i << "]: " << ubp_av[i] << endl;
+        string str_cmd(ubp_av[i]);
+        fprintf(stderr, "argv[%d]: \'%s\' [", i, str_cmd.c_str());
+        for(int j = 0; j < str_cmd.size(); ++j)
+        {
+            fprintf(stderr, "0x%x ", (unsigned int)str_cmd[j]);
+        }
+        fprintf(stderr, "] (%lu byte)\n", str_cmd.size());
     }
 
     (*orig_libc_start_main)(main, argc, ubp_av, init, fini, rtld_fini, stack_end);

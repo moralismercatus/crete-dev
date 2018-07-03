@@ -17,14 +17,16 @@ namespace crete
 namespace cluster
 {
 
+const static uint64_t BASE_TEST_CACHE_SIZE = 200;
+
 bool TestPriority::operator() (const TestCase& lhs, const TestCase& rhs) const
 {
   if (m_tc_sched_strat == FIFO)
   {
       return false;
   } else if (m_tc_sched_strat == BFS) {
-      if(lhs.get_traceTag_explored_nodes().size()
-              > rhs.get_traceTag_explored_nodes().size())
+      if(lhs.get_tt_last_node_index()
+              > rhs.get_tt_last_node_index())
       {
           return true;
       } else {
@@ -38,20 +40,24 @@ bool TestPriority::operator() (const TestCase& lhs, const TestCase& rhs) const
 }
 
 TestPool::TestPool(const fs::path& root)
-    : root_{root}
-    ,next_(TestPriority(BFS)) {}
+    : root_(root)
+    ,tc_count_(0)
+    ,next_(TestPriority(BFS))
+    ,m_duplicated_tc_count(0) {}
 
 auto TestPool::next() -> boost::optional<TestCase>
 {
-    if(next_.empty())
+    boost::optional<TestCase> ret;
+    assert(!ret);
+
+    // XXX: Iterate until a non-duplicate test case is found
+    while(!next_.empty() && !ret)
     {
-        return boost::optional<TestCase>{};
+        ret = get_complete_tc(next_.top());
+        next_.pop();
     }
 
-    auto tc = next_.top();
-    next_.pop();
-
-    return boost::optional<TestCase>{tc};
+    return ret;
 }
 
 // The initial test case extracted from config will only be used to start the test,
@@ -59,65 +65,50 @@ auto TestPool::next() -> boost::optional<TestCase>
 // the target exec under test
 auto TestPool::insert_initial_tc_from_config(const TestCase& tc) -> bool
 {
-    assert(test_tree_.empty());
     assert(next_.empty());
+    assert(tc_count_ == 0);
 
     next_.push(tc);
     return true;
 }
 
-auto TestPool::insert(const TestCase& tc) -> bool
+auto TestPool::insert_initial_tcs(const std::vector<TestCase>& tcs) -> void
 {
-    if(insert_tc_tree(tc))
+    assert(next_.empty());
+    assert(tc_count_ == 0);
+
+    for(const auto& tc : tcs)
     {
-        next_.push(tc);
-        return true;
+        insert_internal(tc);
     }
-
-    return false;
-}
-
-auto TestPool::insert(const TestCase& tc, const TestCase& input_tc) -> bool
-{
-    if(insert_tc_tree(tc, input_tc))
-    {
-        next_.push(tc);
-        return true;
-    }
-
-    return false;;
 }
 
 auto TestPool::insert(const std::vector<TestCase>& tcs) -> void
 {
+    // Special case for initial_tc_from_config
+    if(tc_count_ == 0)
+    {
+        assert(!tcs.front().is_test_patch());
+        write_test_case(tcs.front(), root_ / "test-case" / std::to_string(++tc_count_));
+    }
+
     for(const auto& tc : tcs)
     {
-        insert(tc);
+        // patch tests are the newly generate tcs
+        if(tc.is_test_patch())
+        {
+            tc.assert_tc_patch();
+            insert_internal(tc);
+        } else {
+            insert_base_tc(tc);
+            write_test_case(tc, root_ / "test-case-base-cache" / std::to_string(tc.get_issue_index()));
+        }
     }
-}
-
-auto TestPool::insert(const std::vector<TestCase>& new_tcs, const TestCase& input_tc) -> void
-{
-    if(test_tree_.empty())
-    {
-        insert_tc_tree(input_tc);
-    }
-
-    for(const auto& tc : new_tcs)
-    {
-        insert(tc, input_tc);
-    }
-}
-
-auto TestPool::clear() -> void
-{
-    next_ = TestQueue(TestPriority(BFS));
-    test_tree_.clear();
 }
 
 auto TestPool::count_all() const -> size_t
 {
-    return test_tree_.size();
+    return tc_count_;
 }
 
 auto TestPool::count_next() const -> size_t
@@ -125,92 +116,112 @@ auto TestPool::count_next() const -> size_t
     return next_.size();
 }
 
-auto TestPool::write_tc_tree(std::ostream& os) -> void const
+auto TestPool::write_log(std::ostream& os) -> void
 {
-    for(boost::unordered_map<TestHash, TestCaseTreeNode>::const_iterator it = test_tree_.begin();
-            it != test_tree_.end(); ++it) {
-        os << "Node tc-" << it->second.m_tc_index << ": [";
-        for(std::vector<uint64_t>::const_iterator c_it = it->second.m_childern_tc_indexes.begin();
-                c_it != it->second.m_childern_tc_indexes.end(); ++c_it) {
-            os << *c_it << " ";
-        }
-        os << "]\n";
+    os << "duplicated tc count from all_: " << m_duplicated_tc_count << endl;
+}
+
+auto TestPool::insert_internal(const TestCase& tc) -> bool
+{
+    next_.push(tc);
+
+    write_test_case(tc, root_ / "test-case" / std::to_string(++tc_count_));
+
+    return true;
+}
+
+auto TestPool::insert_base_tc(const TestCase& tc) -> BaseTestCache_ty::const_iterator
+{
+    issued_tc_hash_pool_.insert(tc.get_elements());
+
+    if(base_tc_cache_.size() >= BASE_TEST_CACHE_SIZE)
+    {
+        base_tc_cache_.clear();
+    }
+
+    std::pair<BaseTestCache_ty::const_iterator, bool> it =
+            base_tc_cache_.insert(std::make_pair(tc.get_issue_index(), tc));
+
+    if(!it.second)
+    {
+        fprintf(stderr, "TestPool::insert_base_tc() error: duplicate issue_index in base_tc_cache_ (issue index = %lu),\n",
+                it.first->first);
+
+        write_test_case(it.first->second, root_ / "test-case-base-error" / "existing_based_tc.bin" );
+        write_test_case(tc, root_ / "test-case-base-error" / "duplicate_base_tc.bin" );
+
+        assert(0);
+    }
+
+    return it.first;
+}
+
+auto TestPool::get_base_tc(const TestCase& tc) -> BaseTestCache_ty::const_iterator
+{
+    assert(tc.is_test_patch());
+
+    TestCaseIssueIndex tc_issue_index = tc.get_base_tc_issue_index();
+    BaseTestCache_ty::const_iterator base_tc_it = base_tc_cache_.find(tc_issue_index);
+
+    if(base_tc_it == base_tc_cache_.end())
+    {
+        fs::path base_tc_path = (root_ / "test-case-base-cache" / std::to_string(tc_issue_index));
+        assert(fs::is_regular(base_tc_path));
+
+        TestCase base_tc = retrieve_test_serialized(base_tc_path.string());
+        assert(base_tc.get_issue_index() == tc_issue_index);
+
+        base_tc_it = insert_base_tc(base_tc);
+    }
+
+    return base_tc_it;
+}
+
+auto TestPool::get_complete_tc(const TestCase& patch_tc) -> boost::optional<TestCase> const
+{
+    TestCase complete_tc;
+    if(!patch_tc.is_test_patch())
+    {
+        complete_tc = patch_tc;
+    } else {
+        BaseTestCache_ty::const_iterator base_tc = get_base_tc(patch_tc);
+        assert(base_tc != base_tc_cache_.end());
+
+        complete_tc = generate_complete_tc_from_patch(patch_tc, base_tc->second);
+    }
+
+    // check whether the new complete_tc duplicates with issued tcs
+    if(issued_tc_hash_pool_.insert(complete_tc.get_elements()).second)
+    {
+        complete_tc.set_issue_index(issued_tc_hash_pool_.size());
+        return boost::optional<TestCase>{complete_tc};
+    } else {
+        ++m_duplicated_tc_count;
+
+        return boost::optional<TestCase>();
     }
 }
 
-auto TestPool::write_test_case(const TestCase& tc, const uint64_t tc_index) -> void
+auto TestPool::write_test_case(const TestCase& tc, const fs::path out_path) -> void
 {
-    namespace fs = boost::filesystem;
+    if(fs::exists(out_path))
+    {
+        fprintf(stderr, "out_path = %s\n", out_path.string().c_str());
+        assert(0 && "[Test Pool] Duplicate test case name.\n");
+    }
 
-    auto tc_root = root_ / "test-case";
-    auto tc_uuids_dir = tc_root / "uuids";
+    if(!fs::exists(out_path.parent_path()))
+        fs::create_directories(out_path.parent_path());
 
-    if(!fs::exists(tc_root))
-        fs::create_directories(tc_root);
-    if(!fs::exists(tc_uuids_dir))
-        fs::create_directories(tc_uuids_dir);
-
-    auto tc_path = tc_root / std::to_string(tc_index);
-    auto const tc_path_rel_to_symlink = ".." / tc_path.filename();
-
-    fs::create_symlink(tc_path_rel_to_symlink,
-                       tc_uuids_dir / boost::uuids::to_string(tc.get_uuid()));
-
-    assert(!fs::exists(tc_path) && "[Test Pool] Duplicate test case name.\n");
-    fs::ofstream ofs(tc_path,
+    fs::ofstream ofs(out_path,
                      std::ios_base::out | std::ios_base::binary);
 
     if(!ofs.good())
     {
-        BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{tc_path.string()});
+        BOOST_THROW_EXCEPTION(Exception{} << err::file_open_failed{out_path.string()});
     }
 
-    tc.write(ofs);
-}
-
-auto TestPool::insert_tc_tree(const TestCase& tc) -> bool
-{
-    std::string test_hash = to_test_hash(tc);
-    if(test_tree_.find(test_hash) != test_tree_.end())
-    {
-        return false;
-    }
-
-    // Add node to tc_tree_ for this new tc
-    test_tree_[test_hash] = TestCaseTreeNode();
-    test_tree_[test_hash].m_tc_index = test_tree_.size();
-    write_test_case(tc, test_tree_[test_hash].m_tc_index);
-
-    return true;
-}
-
-auto TestPool::insert_tc_tree(const TestCase& tc, const TestCase& input_tc) -> bool
-{
-    std::string test_hash = to_test_hash(tc);
-    if(test_tree_.find(test_hash) != test_tree_.end())
-    {
-        return false;
-    }
-
-    // Add node to tc_tree_ for this new tc
-    test_tree_[test_hash] = TestCaseTreeNode();
-    test_tree_[test_hash].m_tc_index = test_tree_.size();
-    write_test_case(tc, test_tree_[test_hash].m_tc_index);
-
-    // Set the parent tc_tree_node for this new
-    std::string input_tc_hash = to_test_hash(input_tc);
-    assert(test_tree_.find(input_tc_hash) != test_tree_.end());
-    test_tree_[input_tc_hash].m_childern_tc_indexes.push_back(test_tree_[test_hash].m_tc_index);
-
-    return true;
-}
-
-auto TestPool::to_test_hash(const TestCase& tc) -> TestHash
-{
-    std::stringstream ss;
-    tc.write(ss);
-
-    return ss.str();
+    write_serialized(ofs, tc);
 }
 
 } // namespace cluster

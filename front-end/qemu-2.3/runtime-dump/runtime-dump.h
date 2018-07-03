@@ -30,16 +30,10 @@ extern int f_crete_is_loading_code;
 
 extern int flag_rt_dump_enable;
 
-// Enabled/Disabled on capture_begin/end. Can be disabled on command (e.g., crete_debug_capture()).
-extern int crete_flag_capture_enabled;
-
-extern uint64_t g_crete_target_pid;
-extern int g_custom_inst_emit;
-
 #if defined(TARGET_X86_64)
-    #define USER_CODE_RANGE 0x00007FFFFFFFFFFF
+    #define KERNEL_CODE_START_ADDR 0x00007FFFFFFFFFFF
 #elif defined(TARGET_I386)
-    #define USER_CODE_RANGE 0xC0000000 // TODO: Should technically be 0xBFFFFFFF
+    #define KERNEL_CODE_START_ADDR 0xC0000000 // TODO: Should technically be 0xBFFFFFFF
 #else
     #error CRETE: Only I386 and x64 supported!
 #endif // defined(TARGET_X86_64) || defined(TARGET_I386)
@@ -103,6 +97,7 @@ int  crete_flags_is_true(struct CreteFlags *cf);
 
 #include <crete/trace_tag.h>
 #include <crete/guest_data_post_exec.hpp>
+#include <crete/test_case.h>
 
 using namespace std;
 
@@ -217,6 +212,7 @@ class RuntimeEnv
 private:
 	// Instruction sequence and its translation context
     TCGLLVMOfflineContext m_tcg_llvm_offline_ctx;
+    void *m_tlo_ctx_cpuState;
 
     // Initial CPU state
     vector<uint8_t> m_initial_CpuState;
@@ -275,6 +271,8 @@ private:
     vector<string> m_make_concolic_order;
 
     string m_outputDirectory;
+
+    crete::TestCase m_input_tc;
 
     // For constructing off-line execution graph/tree
     // (contains extra one non-symbolic-tb after each symbolic-tb)
@@ -356,6 +354,8 @@ public:
 
     void reverseTBDump(void *qemuCpuState);
 
+    void handleCreteVoidTargetPid();
+
     static int access_guest_memory(const void *env_cpuState, uint64_t addr,
             uint8_t *buf, int len, int is_write);
 
@@ -426,7 +426,7 @@ public:
 
 private:
 	uint64_t m_target_pid;  // g_crete_target_pid
-	bool m_capture_started; // g_custom_inst_emit
+	bool m_capture_started; // g_crete_is_valid_target_pid
 
 	bool m_capture_enabled; // crete_flag_capture_enabled
 

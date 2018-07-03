@@ -237,6 +237,8 @@ auto DispatchUI::process_config(const pt::ptree& config) -> option::Dispatch
                                           << err::parse{"crete.test.items"});
     }
 
+    opts.coverage.cmd_path = crete.get<std::string>("coverage", "");
+
     if(opts.mode.distributed)
     {
         CRETE_EXCEPTION_ASSERT( !opts.test.items.empty()
@@ -304,6 +306,7 @@ auto DispatchUI::process_options() -> void
                      config);
 
         options_ = process_config(config);
+        options_.file_path = config_path.string();
     }
     else
     {

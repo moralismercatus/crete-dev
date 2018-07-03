@@ -14,8 +14,6 @@
 
 #if defined(TCG_LLVM_OFFLINE)
 #include "tcg-llvm.h"
-#include <llvm/Support/FileSystem.h>
-#include <llvm/Support/Path.h>
 #endif // defined(TCG_LLVM_OFFLINE)
 
 using namespace std;
@@ -152,6 +150,7 @@ extern "C" {
 #include "exec-all.h"
 }
 
+#include <boost/exception/all.hpp>
 #include <boost/filesystem.hpp>
 #include <sstream>
 
@@ -272,6 +271,9 @@ void x86_llvm_translator()
     tcg_llvm_ctx = tcg_llvm_initialize();
     assert(tcg_llvm_ctx);
 
+    tcg_linkWithLibrary(tcg_llvm_ctx,
+            crete_find_file(CRETE_FILE_TYPE_LLVM_LIB, "bc_crete_ops.bc").c_str());
+
 #if defined(TARGET_X86_64)
     tcg_linkWithLibrary(tcg_llvm_ctx,
             crete_find_file(CRETE_FILE_TYPE_LLVM_LIB, "crete-qemu-2.3-op-helper-x86_64.bc").c_str());
@@ -371,15 +373,28 @@ void x86_llvm_translator()
             assert(temp_tb.tcg_llvm_context != NULL);
             assert(temp_tb.llvm_function != NULL);
         }
+
+        {
+            //process crete_CPUStateSynctable();
+            ss.str(string());
+            ss << "dump_sync_cpu_states." << streamed_count-1 << ".bin";
+            tcg_llvm_ctx->generate_llvm_cpuStateSyncTables(ss.str());
+        }
+
+        {
+            //process dump_new_sync_memos();
+            ss.str(string());
+            ss << "dump_new_sync_memos." << streamed_count-1 << ".bin";
+            tcg_llvm_ctx->generate_llvm_MemorySyncTables(ss.str());
+        }
     }
 
     //4. generate main function
     tcg_llvm_ctx->generate_crete_main();
 
     //5. Write out the translated llvm bitcode to file in the current folder
-    llvm::sys::Path bitcode_path = llvm::sys::Path::GetCurrentDirectory();
-    bitcode_path.appendComponent("dump_llvm_offline.bc");
-    tcg_llvm_ctx->writeBitCodeToFile(bitcode_path.str());
+    fs::path bitcode_path = fs::current_path() / "dump_llvm_offline.bc";
+    tcg_llvm_ctx->writeBitCodeToFile(bitcode_path.string());
 
     cerr << "offline translator is done.\n" << endl;
     //6. cleanup
@@ -388,7 +403,16 @@ void x86_llvm_translator()
 
 int main(int argc, char **argv) {
     crete_set_data_dir(argv[0]);
-    x86_llvm_translator();
+
+    try {
+        x86_llvm_translator();
+    }
+    catch(...)
+    {
+        cerr << "Exception Info: \n"
+                << boost::current_exception_diagnostic_information() << endl;
+        return -1;
+    }
 
     return 0;
 }

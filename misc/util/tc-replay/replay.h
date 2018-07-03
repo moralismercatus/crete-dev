@@ -35,10 +35,20 @@ private:
     vector<string> m_launch_args;
     bp::posix_context m_launch_ctx;
 
+    bp::posix_context m_launch_ctx_secondary;
+    vector<string> m_secondary_cmds;
+
     fs::path m_input_sandbox;
+    fs::path m_input_launch;
+
+    fs::path m_environment;
     bool m_init_sandbox;
+    bool m_enable_log;
     fs::path m_guest_config_serialized;
     fs::path m_current_tc;
+
+    fs::path m_exploitable_out;
+    fs::path m_exploitable_script;
 
 public:
     CreteReplay(int argc, char* argv[]);
@@ -52,8 +62,13 @@ private:
     void reset_sandbox();
     void reset_sandbox_folder_permission();
 
+    void reset_launch_dir();
+
     void collect_gcov_result();
     void replay();
+
+    void check_exploitable(const fs::path& tc_path,
+            const string& replay_log) const;
 };
 
 }

@@ -15,7 +15,8 @@
 #include <boost/move/unique_ptr.hpp>
 #include <boost/move/make_unique.hpp>
 
-//#include <iostream>
+#include <atomic>
+#include <thread>
 
 namespace crete
 {
@@ -37,12 +38,16 @@ public:
     auto display_status() -> void;
 
 private:
+    using AtomicFlag = std::atomic<bool>;
+    using AtomicFlagPtr = boost::movelib::unique_ptr<AtomicFlag>; // Ptr because atomic is not movable.
+
     AtomicGuard<Node>& node_;
-    boost::movelib::unique_ptr<AtomicGuard<bool>> transmission_pending_; // Had to make a ptr for some other reason.
     ID node_id_;
     IPAddress master_ip_address_;
     Port master_port_;
     bool shutdown_ = false;
+    AtomicFlagPtr transmission_pending_
+        = boost::movelib::make_unique<AtomicFlag>(false);
 };
 
 template <typename Node>
@@ -69,7 +74,6 @@ NodeDriver<Node>::NodeDriver(const IPAddress& master_ipa,
                              const Port& master_port,
                              AtomicGuard<Node>& node) :
     node_(node),
-    transmission_pending_(boost::movelib::make_unique<AtomicGuard<bool>>(false)),
     node_id_(node_.acquire()->id()),
     master_ip_address_(master_ipa),
     master_port_(master_port)
@@ -112,9 +116,9 @@ auto NodeDriver<Node>::run_node(AsyncTask& async_task) -> void
 
         try
         {
-            while(transmission_pending_->acquire())
+            if(*transmission_pending_)
             {
-                // Wait until transmission has finished, so as to avoid contention for node_.
+                std::this_thread::yield();
             }
 
             node_.acquire()->run();
@@ -149,8 +153,6 @@ auto NodeDriver<Node>::run_listener() -> void
         boost::asio::streambuf sbuf;
         auto pkinfo = client.read(sbuf);
 
-        transmission_pending_->acquire() = true;
-
         if(pkinfo.id != node_id_)
         {
             BOOST_THROW_EXCEPTION(Exception{} << err::network_type_mismatch{pkinfo.id}
@@ -161,13 +163,26 @@ auto NodeDriver<Node>::run_listener() -> void
                 sbuf,
                 client};
 
-        auto processed = process(node_,
-                                 request);
-
-        if(!processed)
+        try
         {
-            shutdown_ = process_default(node_,
-                                        request);
+            *transmission_pending_ = true;
+
+            auto processed = process(node_,
+                                     request);
+
+            if(!processed)
+            {
+                shutdown_ = process_default(node_,
+                                            request);
+            }
+
+            *transmission_pending_ = false;
+        }
+        catch(...)
+        {
+            *transmission_pending_ = false;
+
+            std::rethrow_exception(std::current_exception());
         }
 
         transmission_pending_->acquire() = false;

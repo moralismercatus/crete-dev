@@ -63,8 +63,6 @@ void tcg_llvm_gen_code(struct TCGLLVMContext *l, struct TCGContext *s,
 
 const char* tcg_llvm_get_func_name(struct TranslationBlock *tb);
 
-void tcg_llvm_initHelper(struct TCGLLVMContext *l);
-
 #if defined(TCG_LLVM_OFFLINE)
 void cpu_gen_llvm(CPUState *env, TranslationBlock *tb);
 int get_llvm_tbCount(struct TCGLLVMContext *l);
@@ -110,11 +108,6 @@ public:
     llvm::Module* getModule();
     llvm::ModuleProvider* getModuleProvider();
 
-    llvm::ExecutionEngine* getExecutionEngine();
-
-    void deleteExecutionEngine();
-    llvm::FunctionPassManager* getFunctionPassManager() const;
-
     /** Called after linking all helper libraries */
     void initializeHelpers();
 
@@ -133,6 +126,8 @@ public:
     void crete_add_tbExecSequ(vector<pair<uint64_t, uint64_t> > seq);
 
     void generate_crete_main();
+    void generate_llvm_cpuStateSyncTables(const string& input_file_name);
+    void generate_llvm_MemorySyncTables(const string& input_file_name);
 #else
 #error "ERROR"
 #endif

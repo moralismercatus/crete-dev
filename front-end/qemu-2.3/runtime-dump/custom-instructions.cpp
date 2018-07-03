@@ -22,6 +22,10 @@ void qemu_system_shutdown_request(void);
 
 using namespace std;
 
+// shared from runtime-dump.cpp
+extern uint64_t g_crete_target_pid;
+extern bool g_crete_is_valid_target_pid;
+
 // TODO: xxx We may need this to capture the initial test case, when
 //        there are more concolic variables than the ones listed
 //        in crete.xml from guest
@@ -31,33 +35,61 @@ static const string crete_trace_ready_file_name = "trace_ready";
 static boost::unordered_set<uint64_t> g_pc_exclude_filters;
 static boost::unordered_set<uint64_t> g_pc_include_filters;
 
-// CRETE_INSTR_CAPTURE_BEGIN_VALUE
-static inline void crete_custom_instr_capture_begin()
+static uint64_t target_process_count = 0;
+static set<string> concolics_names;
+
+// CRETE_INSTR_SEND_TARGET_PID_VALUE
+static inline void crete_custom_instr_sent_target_pid()
 {
 	g_crete_flags->set((uint64_t)g_cpuState_bct->cr[3]);
 
 	g_crete_target_pid = g_cpuState_bct->cr[3];
-	g_custom_inst_emit = 1;
-	crete_flag_capture_enabled = 1;
+	g_crete_is_valid_target_pid = true;
+	++target_process_count;
 }
 
-// CRETE_INSTR_CAPTURE_END_VALUE
-static inline void crete_custom_instr_capture_end()
+// CRETE_INSTR_VOID_TARGET_PID_VALUE
+static inline void crete_custom_instr_void_target_pid()
 {
 	g_crete_flags->reset();
 
-    g_crete_target_pid = 0;
-//    g_custom_inst_emit = 0;
-    crete_flag_capture_enabled = 0;
-
-    // FIXME: xxx workaround to force not dumping the current tb
-    //      which is capture_end() function.
-    // This is more likely a problem of taint analysis.
-    crete_tci_next_block();
-    crete_tci_next_block();
+    g_crete_is_valid_target_pid = false;
+    runtime_env->handleCreteVoidTargetPid();
 }
 
-static char current_concolic_name[512];
+static inline void crete_custom_instr_check_target_pid()
+{
+    // Only process if it is from valid target pid while not processing interrupt
+    if(g_crete_is_valid_target_pid &&
+            ((uint64_t)g_cpuState_bct->cr[3] == g_crete_target_pid) &&
+            !runtime_env->check_interrupt_process_info(0))
+    {
+        target_ulong addr = g_cpuState_bct->regs[R_EAX];
+        uint8_t ret = 1;
+
+        if(RuntimeEnv::access_guest_memory(g_cpuState_bct, addr, &ret, 1, 1) != 0) {
+            cerr << "[CRETE ERROR] access_guest_memory() failed in crete_custom_instr_check_target_pid()\n";
+            assert(0);
+        }
+    }
+}
+
+static string get_unique_name(const char *name)
+{
+    stringstream unique_name;
+    unique_name << name << "_p" << target_process_count;
+    string base_name = unique_name.str();
+
+    unsigned count = 0;
+    while(!concolics_names.insert(unique_name.str()).second) {
+        unique_name.str(string());
+        unique_name << base_name << "_" << ++count;
+    }
+
+    return unique_name.str();
+}
+#define MAX_CONCOLIC_NAME_SIZE 256
+static char current_concolic_name[2*MAX_CONCOLIC_NAME_SIZE];
 
 // CRETE_INSTR_SEND_CONCOLIC_NAME_VALUE
 static inline void crete_custom_instr_send_concolic_name()
@@ -68,7 +100,8 @@ static inline void crete_custom_instr_send_concolic_name()
     target_ulong name_guest_addr = g_cpuState_bct->regs[R_EAX];
     target_ulong name_size = g_cpuState_bct->regs[R_ECX];
 
-    assert(name_size > 0 && name_size < 511 && "[CRETE ERROR] name size for concolic variable is bigger than 512\n");
+    assert(name_size > 0 && name_size < MAX_CONCOLIC_NAME_SIZE
+            && "[CRETE ERROR] name size for concolic variable is bigger than MAX_CONCOLIC_NAME_SIZE\n");
 
     if(RuntimeEnv::access_guest_memory(g_cpuState_bct, name_guest_addr,
             (uint8_t *)current_concolic_name, name_size, 0) != 0) {
@@ -78,10 +111,27 @@ static inline void crete_custom_instr_send_concolic_name()
     }
 
     current_concolic_name[name_size] = '\0';
+
+    string unique_name = get_unique_name(current_concolic_name);
+    if(strcmp(unique_name.c_str(), current_concolic_name))
+    {
+        uint64_t unique_name_size = unique_name.size();
+        assert(unique_name_size > name_size);
+        assert(unique_name_size < (2*MAX_CONCOLIC_NAME_SIZE-1));
+        strncpy(current_concolic_name, unique_name.c_str(), unique_name_size);
+        current_concolic_name[unique_name_size] = '\0';
+
+        if(RuntimeEnv::access_guest_memory(g_cpuState_bct, name_guest_addr,
+                (uint8_t *)current_concolic_name, unique_name_size+1, 1) != 0) {
+
+            cerr << "[CRETE ERROR] access_guest_memory() failed in crete_custom_instr_send_concolic_name()\n";
+            assert(0);
+        }
+    }
 }
 
-// CRETE_INSTR_MAKE_CONCOLIC_VALUE
-static inline void crete_custom_instr_make_concolic()
+// CRETE_INSTR_PRE_MAKE_CONCOLIC_VALUE
+static inline void crete_custom_instr_pre_make_concolic()
 {
     assert(current_concolic_name[0] != '\0' &&
             "[CRETE ERROR] current_concolic_name is empty. "
@@ -94,6 +144,16 @@ static inline void crete_custom_instr_make_concolic()
     target_ulong size = g_cpuState_bct->regs[R_ECX];
 
     runtime_env->handlecreteMakeConcolic(concolic_name, guest_addr, size);
+}
+
+// CRETE_INSTR_KERNEL_OOPS_VALUE
+// TODO: xxx make it better with keeping traces so far
+// Report with prints and quit VM, from where vm-node should log the
+// VM quit with related information and test case
+static inline void crete_custom_instr_kernel_oops()
+{
+    fprintf(stderr, "[Potential Bugs] crete_kernel_oops()\n");
+    qemu_system_shutdown_request();
 }
 
 // CRETE_INSTR_PRIME_VALUE:
@@ -140,13 +200,15 @@ static inline void crete_tracing_reset()
     // Release
     crete_runtime_dump_close(); // Cleanup must happen before tb_flush (or crash occurs).
     tb_flush(g_cpuState_bct); // Flush tb cache, so references to runtime_env/tcg_llvm_ctx are destroyed.
-	assert(!runtime_env && !g_crete_flags);
+    assert(!runtime_env && !g_crete_flags);
 
-	// reset flags
-	g_custom_inst_emit = 0;
+    // reset flags
+    g_crete_is_valid_target_pid = false;
     g_crete_target_pid = 0;
+    target_process_count = 0;
+    concolics_names.clear();
 
-	// Reacquire
+    // Reacquire
     crete_runtime_dump_initialize();
     assert(runtime_env && g_crete_flags);
     crete_tci_next_iteration();
@@ -209,31 +271,38 @@ static void crete_custom_instr_read_port()
 }
 
 void crete_custom_instruction_handler(uint64_t arg) {
-#if defined(CRETE_DEBUG)
-    if(arg != 0x02AE00)
-        cerr << "opcode = " << hex << arg << dec << endl;
-#endif // defined(CRETE_DEBUG)
-
 	switch (arg) {
-	case CRETE_INSTR_CAPTURE_BEGIN_VALUE: // Begin capture
-	    crete_custom_instr_capture_begin();
+	case CRETE_INSTR_READ_PORT_VALUE:
+	    crete_custom_instr_read_port();
 	    break;
 
-	case CRETE_INSTR_CAPTURE_END_VALUE: // End capture
-	    crete_custom_instr_capture_end();
+	case CRETE_INSTR_PRIME_VALUE:
+	    crete_custom_instr_prime();
+	    crete_tracing_reset();
+	    break;
+
+	case CRETE_INSTR_SEND_TARGET_PID_VALUE:
+	    crete_custom_instr_sent_target_pid();
+	    break;
+
+	case CRETE_INSTR_VOID_TARGET_PID_VALUE:
+	    crete_custom_instr_void_target_pid();
+	    break;
+
+	case CRETE_INSTR_CHECK_TARGET_PID_VALUE:
+	    crete_custom_instr_check_target_pid();
 	    break;
 
 	case CRETE_INSTR_SEND_CONCOLIC_NAME_VALUE:
 	    crete_custom_instr_send_concolic_name();
 	    break;
 
-	case CRETE_INSTR_MAKE_CONCOLIC_VALUE:
-	    crete_custom_instr_make_concolic();
+	case CRETE_INSTR_PRE_MAKE_CONCOLIC_VALUE:
+	    crete_custom_instr_pre_make_concolic();
 	    break;
 
-	case CRETE_INSTR_PRIME_VALUE:
-        crete_custom_instr_prime();
-	    crete_tracing_reset();
+	case CRETE_INSTR_KERNEL_OOPS_VALUE:
+	    crete_custom_instr_kernel_oops();
 	    break;
 
 	case CRETE_INSTR_DUMP_VALUE:
@@ -249,26 +318,9 @@ void crete_custom_instruction_handler(uint64_t arg) {
 	    crete_custom_instr_inlude_filter();
 	    break;
 
-	case CRETE_INSTR_READ_PORT_VALUE:
-	    crete_custom_instr_read_port();
-	    break;
-
 	case CRETE_INSTR_QUIT_VALUE:
 	    qemu_system_shutdown_request();
 	    break;
-
-	    // TODO: xxx cleanup unused custom instructions
-    case CRETE_INSTR_MESSAGE_VALUE:
-	case 0x07AE00: // Symtab function entries (one at a time)
-	case CRETE_INSTR_CALL_STACK_EXCLUDE_VALUE: // call-stack-exclude
-	case CRETE_INSTR_CALL_STACK_SIZE_VALUE:
-	case CRETE_INSTR_MAIN_ADDRESS_VALUE:
-	case CRETE_INSTR_LIBC_START_MAIN_ADDRESS_VALUE:
-	case CRETE_INSTR_LIBC_EXIT_ADDRESS_VALUE:
-	case CRETE_INSTR_STACK_DEPTH_BOUNDS_VALUE:
-	    assert(0 && "Obsolete custom instructions\n");
-	    break;
-// Add new custom instruction handler here
 // Add new custom instruction handler here
 
 	default:

@@ -9,17 +9,24 @@
 extern "C" {
 #endif
 
-#define CRETE_CROSS_CHECK // Enable cross check
+#define CRETE_BUILD_MODE_DEBUG
+
+//#define CRETE_CROSS_CHECK // Enable cross check
 
 //#define CRETE_DBG_TA    // Debug taint-analysis
 //#define CRETE_DBG_MEM   // Debug memory usage
 //#define CRETE_DBG_MEM_MONI // Debug Memory monitoring
-#define CRETE_DBG_TODO    // Debug TODO work
 
 //#define CRETE_DEBUG_GENERAL // general debug info
 //#define CRETE_DEBUG_TRACE_TAG // Debug trace tag
 //#define CRETE_DEBUG_TRACE_KERNEL // Debug trace into kernel code
 //#define CRETE_DEBUG_INTERRUPT// Debug interrupt
+
+#ifdef CRETE_BUILD_MODE_DEBUG
+#define CRETE_BDMD_DBG(x) do { x } while(0)
+#else
+#define CRETE_BDMD_DBG(x) do { } while(0)
+#endif
 
 #ifdef CRETE_DEBUG_GENERAL
 #define CRETE_DBG_GEN(x) do { x } while(0)

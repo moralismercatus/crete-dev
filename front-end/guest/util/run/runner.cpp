@@ -20,6 +20,9 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/shared_ptr.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 
 #include <unistd.h>
 #include <sys/mount.h>
@@ -72,8 +75,10 @@ private:
     fs::path m_exec;
     std::vector<std::string> m_launch_args;
     bp::posix_context m_launch_ctx;
+    bp::posix_context m_launch_ctx_secondary;
 
     fs::path m_sandbox_dir;
+    fs::path m_environment;
     fs::path m_proc_map;
     fs::path m_guest_config_serialized;
 
@@ -89,7 +94,10 @@ public:
     void prime_executable();
     void write_configuration() const;
     void launch_executable();
+    void void_target_pid() const;
     void signal_dump() const;
+
+    void execute_secondary_cmds() const;
 
     void process_func_filter(ProcReader& pr,
                              const config::Functions& funcs,
@@ -97,22 +105,6 @@ public:
     void process_lib_filter(ProcReader& pr,
                             const std::vector<std::string>& libs,
                             void (*f_custom_instr)(uintptr_t, uintptr_t));
-    void process_executable_section(ELFReader& reader,
-                                    const std::vector<std::string>& sections,
-                                    void (*f_custom_instr)(uintptr_t, uintptr_t));
-    void process_call_stack_library_exclusions(ELFReader& er,
-                                               const ProcReader& pr);
-    void process_call_stack_library_exclusions(const ProcReader& pr,
-                                               const std::vector<boost::filesystem::path>& libraries);
-    void process_library_sections(const ProcReader& pr);
-    void process_library_section(ELFReader& reader,
-                                 const std::vector<std::string>& sections,
-                                 void (*f_custom_instr)(uintptr_t, uintptr_t),
-                                 uint64_t base_addr);
-    void process_executable_function_entries(const std::vector<Entry>& entries);
-    void process_library_function_entries(const std::vector<Entry>& entries,
-                                          uint64_t base_addr,
-                                          std::string path);
     fs::path deduce_library(const fs::path& lib,
                             const ProcReader& pr);
 
@@ -191,13 +183,6 @@ public:
         template <class Event,class FSM>
         void on_exit(Event const&,FSM& ) {std::cerr << "[crete-run] leaving: LoadDefaults" << std::endl;}
     };
-    struct LoadInputData : public msm::front::state<>
-    {
-        template <class Event,class FSM>
-        void on_entry(Event const& ,FSM&) {std::cerr << "[crete-run] entering: LoadInputData" << std::endl;}
-        template <class Event,class FSM>
-        void on_exit(Event const&,FSM& ) {std::cerr << "[crete-run] leaving: LoadInputData" << std::endl;}
-    };
     struct TransmitGuestData : public msm::front::state<>
     {
         template <class Event,class FSM>
@@ -266,7 +251,6 @@ public:
     void connect_host(const poll&);
     void load_host_data(const poll&);
     void load_defaults(const poll&);
-    void load_file_data(const poll&);
     void transmit_guest_data(const poll&);
     void prime(const poll&);
     void process_config(const poll&);
@@ -316,9 +300,7 @@ public:
     //   +------------------+------------------+------------------+---------------------+------------------+
     a_row<LoadHostData      ,poll              ,LoadDefaults      ,&M::load_host_data                        >,
     //   +------------------+------------------+------------------+---------------------+------------------+
-    a_row<LoadDefaults      ,poll              ,LoadInputData     ,&M::load_defaults                         >,
-    //   +------------------+------------------+------------------+---------------------+------------------+
-    a_row<LoadInputData     ,poll              ,TransmitGuestData ,&M::load_file_data                       >,
+    a_row<LoadDefaults      ,poll              ,TransmitGuestData ,&M::load_defaults                         >,
     //   +------------------+------------------+------------------+---------------------+------------------+
     a_row<TransmitGuestData ,poll              ,Prime             ,&M::transmit_guest_data                   >,
     //   +------------------+------------------+------------------+---------------------+------------------+
@@ -350,15 +332,18 @@ struct start // Basically, serves as constructor.
 {
     start(const std::string& host_ip,
           const fs::path& config,
-          const fs::path& sandbox) :
+          const fs::path& sandbox,
+          const fs::path& environment) :
         host_ip_(host_ip),
         config_(config),
-        sandbox_(sandbox)
+        sandbox_(sandbox),
+        environment_(environment)
     {}
 
     const std::string& host_ip_;
     const fs::path& config_;
     const fs::path& sandbox_;
+    const fs::path& environment_;
 };
 
 RunnerFSM_::RunnerFSM_() :
@@ -375,6 +360,7 @@ void RunnerFSM_::init(const start& ev)
     guest_config_path_ = ev.config_;
 
     m_sandbox_dir = ev.sandbox_;
+    m_environment = ev.environment_;
 }
 
 void RunnerFSM_::verify_env(const poll&)
@@ -457,7 +443,7 @@ void RunnerFSM_::load_defaults(const poll&)
 }
 
 static unsigned monitored_pid = 0;
-static unsigned monitored_timeout = 3;
+static unsigned monitored_timeout = 60;
 
 static void timeout_handler(int signum)
 {
@@ -516,17 +502,34 @@ void RunnerFSM_::setup_launch_exec()
     m_launch_ctx.output_behavior.insert(bp::behavior_map::value_type(STDERR_FILENO, bp::redirect_stream_to_stdout()));
     m_launch_ctx.input_behavior.insert(bp::behavior_map::value_type(STDIN_FILENO, bp::capture_stream()));
 
-    //TODO: xxx unified the environment, may use klee's env.sh
-    m_launch_ctx.environment = bp::self::get_environment();
-    m_launch_ctx.environment.erase("LD_PRELOAD");
-    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_run_preload.so"));
-
     m_launch_ctx.work_directory = m_exec_launch_dir.string();
 
     if(!m_sandbox_dir.empty())
     {
         m_launch_ctx.chroot = CRETE_SANDBOX_PATH;
     }
+
+    if(!m_environment.empty())
+    {
+        assert(m_launch_ctx.environment.empty());
+        std::ifstream ifs (m_environment.string().c_str());
+        if(!ifs.good())
+            BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_environment.string()));
+
+        std::string env_name;
+        std::string env_value;
+        fprintf(stderr, "Using unified environment variables from %s\n", m_environment.string().c_str());
+        while(ifs >> env_name >> env_value)
+        {
+            fprintf(stderr, "%s=%s\n", env_name.c_str(), env_value.c_str());
+            m_launch_ctx.environment.insert(bp::environment::value_type(env_name, env_value));
+        }
+    } else {
+        m_launch_ctx.environment = bp::self::get_environment();
+    }
+    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_run_preload.so"));
+    m_launch_ctx.environment.erase("PWD");
+    m_launch_ctx.environment.insert(bp::environment::value_type("PWD", m_launch_ctx.work_directory));
 
     // 4. setup the path for proc-map and guest_config_serialized
     if(m_sandbox_dir.empty())
@@ -537,6 +540,9 @@ void RunnerFSM_::setup_launch_exec()
         m_proc_map = fs::path(CRETE_SANDBOX_PATH) / CRETE_PROC_MAPS_PATH;
         m_guest_config_serialized = fs::path(CRETE_SANDBOX_PATH) / CRETE_CONFIG_SERIALIZED_PATH;
     }
+
+    m_launch_ctx_secondary = m_launch_ctx;
+    m_launch_ctx_secondary.environment.insert(bp::environment::value_type(CRETE_ENV_SEC_CMD, "true"));
 
     // 5. setup timeout hanlder
     init_timeout_handler();
@@ -553,20 +559,19 @@ void RunnerFSM_::init_launch_folder()
     init_ramdisk();
 }
 
-void RunnerFSM_::load_file_data(const poll&)
-{
-    guest_config_.load_file_data();
-}
-
 void RunnerFSM_::transmit_guest_data(const poll&)
 {
+    guest_config_.load_file_data();
+
     PacketInfo pk;
     pk.id = 0; // TODO: Don't care? Maybe. What about a custom instruction that reads the VM's pid as an ID, to be checked both for sanity and to give the instance a way to check whether the VM is still running.
-    pk.size = 0; // Don't care. Set by write_serialized_text.
+    pk.size = 0; // Don't care. Set by write_serialized_text()
     pk.type = packet_type::guest_configuration;
-    write_serialized_text_xml(*client_,
-                              pk,
-                              guest_config_);
+    write_serialized_text(*client_,
+                          pk,
+                          guest_config_);
+
+    guest_config_.clear_file_data();
 }
 
 void RunnerFSM_::prime(const poll&)
@@ -614,7 +619,7 @@ void RunnerFSM_::write_configuration() const
         BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_guest_config_serialized.string()));
     }
 
-    boost::archive::text_oarchive oa(ofs);
+    boost::archive::binary_oarchive oa(ofs);
     oa << guest_config_;
 }
 
@@ -632,7 +637,7 @@ static inline void process_exit_status(std::ostream& log, int exit_status)
         int signum = exit_status - CRETE_EXIT_CODE_SIG_BASE ;
         if(signum == SIGUSR1)
         {
-            log << "Replay Timeout\n";
+            log << "Timeout reached: " << monitored_timeout << " seconds\n";
         } else {
             log << "[Signal Caught] signum = " << signum << ", signame: " << strsignal(signum) << std::endl;
         }
@@ -678,6 +683,69 @@ void RunnerFSM_::launch_executable()
 #endif
 }
 
+static bool execute_command_line(const std::string& cmd, const bp::posix_context& ctx)
+ {
+    fprintf(stderr, "executing: %s\n", cmd.c_str());
+
+    bool ret = true;
+
+     std::vector<std::string> args;
+     boost::split(args, cmd, boost::is_any_of(" "), boost::token_compress_on);
+
+     std::string exec = args[0];
+     if(!fs::exists(exec))
+     {
+         exec = bp::find_executable_in_path(exec);
+     }
+
+     if(!fs::exists(exec))
+     {
+         fprintf(stderr, "[CRETE ERROR] [crete-run] command not found: %s\n", exec.c_str());
+         assert(0);
+     }
+
+     bp::posix_child c = bp::posix_launch(exec, args, ctx);
+
+     monitored_pid = c.get_id();
+     assert(monitored_timeout != 0);
+     alarm(monitored_timeout);
+
+     bp::status s = c.wait();
+
+     alarm(0);
+
+     if(!(s.exited() && (s.exit_status() == 0)))
+     {
+         ret = false;
+     }
+
+     return ret;
+}
+
+void RunnerFSM_::execute_secondary_cmds() const
+{
+    const std::vector<std::string>& cmds = guest_config_.get_secondary_cmds();
+    fprintf(stderr, "sec_cmds.size() = %lu\n", cmds.size());
+
+    for(std::vector<std::string>::const_iterator it = cmds.begin();
+            it != cmds.end(); ++it) {
+        bool cmd_executed = execute_command_line(*it, m_launch_ctx_secondary);
+        if(!cmd_executed)
+        {
+            fprintf(stderr, "[CRETE Warning][crete-run] \'%s\' executed unsuccessfully.\n", it->c_str());
+        }
+
+        void_target_pid();
+    }
+}
+
+void RunnerFSM_::void_target_pid() const
+{
+#if !defined(CRETE_TEST)
+    crete_void_target_pid();
+#endif // !defined(CRETE_TEST)
+}
+
 void RunnerFSM_::signal_dump() const
 {
 #if !defined(CRETE_TEST)
@@ -716,7 +784,6 @@ void RunnerFSM_::validate_setup(const poll&)
 void RunnerFSM_::update_config(const poll&)
 {
     guest_config_.is_first_iteration(false);
-    guest_config_.clear_file_data();
 
     write_configuration();
 
@@ -735,9 +802,10 @@ void RunnerFSM_::execute(const next_test&)
     }
 
 #if !defined(CRETE_TEST)
-
     launch_executable();
+    void_target_pid();
 
+    execute_secondary_cmds();
 #endif // !defined(CRETE_TEST)
 }
 
@@ -1129,82 +1197,6 @@ void RunnerFSM_::process_lib_filter(ProcReader& pr,
     }
 }
 
-void RunnerFSM_::process_executable_section(ELFReader& reader,
-                                            const std::vector<std::string>& sections,
-                                            void (*f_custom_instr)(uintptr_t, uintptr_t))
-{
-    for(std::vector<std::string>::const_iterator iter = sections.begin();
-        iter != sections.end();
-        ++iter)
-    {
-        Entry entry = reader.get_section(*iter);
-
-        if(entry.addr == 0)
-            continue;//throw std::runtime_error("failed to get address of '" + *iter + "' - ensure binary has section");
-
-        f_custom_instr(entry.addr, entry.addr + entry.size);
-    }
-}
-
-void RunnerFSM_::process_library_sections(const ProcReader& pr)
-{
-#if !defined(CRETE_TEST)
-
-    using namespace std;
-
-    const vector<ProcMap> proc_maps = pr.find_all();
-
-    set<string> lib_paths;
-    for(vector<ProcMap>::const_iterator it = proc_maps.begin();
-        it != proc_maps.end();
-        ++it)
-    {
-        if(fs::exists(it->path()))
-        {
-            lib_paths.insert(it->path());
-        }
-    }
-
-    for(set<string>::const_iterator it = lib_paths.begin();
-        it != lib_paths.end();
-        ++it)
-    {
-        string path = *it;
-
-        vector<ProcMap> pms = pr.find(path);
-
-        ELFReader ereader(path);
-
-        uint64_t base_addr = pms.front().address().first;
-
-        process_library_section(ereader,
-                                guest_config_.get_section_exclusions(),
-                                crete_insert_instr_call_stack_exclude,
-                                base_addr);
-    }
-
-#endif // !defined(CRETE_TEST)
-}
-
-void RunnerFSM_::process_library_section(ELFReader& reader,
-                                         const std::vector<std::string>& sections,
-                                         void (*f_custom_instr)(uintptr_t, uintptr_t),
-                                         uint64_t base_addr)
-{
-    for(std::vector<std::string>::const_iterator iter = sections.begin();
-        iter != sections.end();
-        ++iter)
-    {
-        Entry entry = reader.get_section(*iter);
-
-        if(entry.addr == 0)
-            continue;//throw std::runtime_error("failed to get address of '" + *iter + "' - ensure binary has section");
-
-        f_custom_instr(entry.addr + base_addr,
-                       entry.addr + base_addr + entry.size);
-    }
-}
-
 bool RunnerFSM_::is_process_finished(const poll&)
 {
     return !process::is_running(pid_);
@@ -1242,6 +1234,7 @@ po::options_description Runner::make_options()
             ("config,c", po::value<fs::path>(), "configuration file")
             ("ip,i", po::value<std::string>(), "host IP")
             ("sandbox,s", po::value<fs::path>(), "sandbox directory")
+            ("environment,v", po::value<fs::path>(), "environment file")
         ;
 
     return desc;
@@ -1301,6 +1294,18 @@ void Runner::process_options()
 
         sandbox_dir_ = p;
     }
+
+    if(var_map_.count("environment"))
+    {
+        fs::path p = var_map_["environment"].as<fs::path>();
+
+        if(!fs::exists(p) && !fs::is_regular(p))
+        {
+            BOOST_THROW_EXCEPTION(Exception() << err::file_missing(p.string()));
+        }
+
+        environment_path_ = p;
+    }
 }
 
 void Runner::start_FSM()
@@ -1317,7 +1322,8 @@ void Runner::run()
 {
     start s(ip_,
             target_config_,
-            sandbox_dir_);
+            sandbox_dir_,
+            environment_path_);
 
     fsm_->process_event(s);
 

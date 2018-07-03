@@ -68,8 +68,15 @@ main()
     mkdir $foldername
     cd $foldername
 
+    for d in $LCOV_DIR
+    do
+        real_lcov_dir=$(readlink -m $d)
+        lcov_cmd_dir="$lcov_cmd_dir --directory $real_lcov_dir"
+    done
+    printf "lcov_cmd_dir = $lcov_cmd_dir\n"
+
     printf "1. Cleanup old coverage info...\n"
-    lcov --directory $LCOV_DIR --zerocounters
+    lcov $lcov_cmd_dir --zerocounters
 
     printf "2. execute all test cases in folder $DISPATCH_OUT_DIR ...\n"
     init_sandbox=true
@@ -96,15 +103,18 @@ main()
             continue
         fi
 
+        # execute the program without argument
+        timeout 5  $PROG_DIR/$target_prog &> /dev/null
+
         # execute all the test cases from the current subfolder with target_prog
-        if [ -d  $f/test-case ]; then
+        if [ -d  $f/test-case-parsed ]; then
             # replay under the folder structure of dispatch
             if [ ! -f $f/guest-data/crete-guest-config.serialized ]; then
                 printf "[Error] Missing file: \'crete-guest-config.serialized\' under folder \'$f/guest-data\'"
                 exit
             fi
 
-            test_case_dir=$f/test-case
+            test_case_dir=$f/test-case-parsed
             config_file_path=$f/guest-data/crete-guest-config.serialized
         elif [ -d $f/seeds ]; then
             # replay under the folder structure of crete-config-generator
@@ -120,31 +130,53 @@ main()
             exit
         fi
 
-        if [ -z  $SANDBOX ]; then
-            printf "[W/O sandbox] executing $target_prog with tc from \'$test_case_dir\'...\n"
-            $CRETE_BIN_DIR/crete-tc-replay -e $PROG_DIR/$target_prog \
-                                           -c $config_file_path \
-                                           -t $test_case_dir >> crete-coverage-progress.log
-        else
+        # prepare command-line for crete-tc-replay with different situations
+        REPLAY_CMD="-e $PROG_DIR/$target_prog -c $config_file_path -t $test_case_dir"
+
+        if [ ! -z  $SANDBOX ]; then
             if [ ! -d  $SANDBOX ]; then
                 printf "$SANDBOX does not exists\n"
                 exit
             fi
+
+            REPLAY_CMD="$REPLAY_CMD -j $SANDBOX"
+
             if [ "$init_sandbox" = true ] ; then
                 printf "[W/ sandbox and init_sandbox] executing $target_prog with tc from \'$test_case_dir\'...\n"
                 init_sandbox=false
-                $CRETE_BIN_DIR/crete-tc-replay -e $PROG_DIR/$target_prog \
-                                               -c $config_file_path      \
-                                               -t $test_case_dir         \
-                                               -j $SANDBOX >> crete-coverage-progress.log
             else
                 printf "[W/ sandbox and W/O init_sandbox] executing $target_prog with tc from \'$test_case_dir\'...\n"
-                $CRETE_BIN_DIR/crete-tc-replay -e $PROG_DIR/$target_prog \
-                                               -c $config_file_path      \
-                                               -t $test_case_dir         \
-                                               -j $SANDBOX -n >> crete-coverage-progress.log
+                REPLAY_CMD="$REPLAY_CMD -n"
+            fi
+        else
+            printf "[W/O sandbox] executing $target_prog with tc from \'$test_case_dir\'...\n"
+            if [ ! -z $CHECK_EXPLOITABLE_SCRIPT ]; then
+                REPLAY_CMD="$REPLAY_CMD -x $DISPATCH_OUT_DIR/parsed-exploitable -r $CHECK_EXPLOITABLE_SCRIPT"
+            fi
+
+            if [ ! -z  $LAUNCH_DIR ]; then
+                if [ ! -d  $LAUNCH_DIR ]; then
+                    printf "$LAUNCH_DIR does not exists\n"
+                    exit
+                fi
+                REPLAY_CMD="$REPLAY_CMD --input-launch-directory $LAUNCH_DIR"
             fi
         fi
+
+        if [ ! -z $UNIFIED_ENV ]; then
+            if [ ! -f $UNIFIED_ENV ]; then
+                printf "$UNIFIED_ENV does not exists\n"
+                exit
+            fi
+
+            REPLAY_CMD="$REPLAY_CMD -v $UNIFIED_ENV" # use unified environment variable
+        fi
+
+        REPLAY_CMD="$REPLAY_CMD -l" # enable logging while replay
+        REPLAY_CMD="$REPLAY_CMD >> crete-coverage-progress.log"
+        printf "REPLAY_CMD = $REPLAY_CMD\n"
+
+        $CRETE_BIN_DIR/crete-tc-replay $REPLAY_CMD
     done
 
     printf "3. Parsing crete.replay.log ...\n"
@@ -158,8 +190,9 @@ main()
     grep -c -w "Replay Timeout"  crete.replay.log
 
     printf "4. generating coverage report... \n"
-    lcov --base-directory $LCOV_DIR --directory $LCOV_DIR --capture --output-file lcov.info --rc lcov_branch_coverage=1 >> lcov.log
-    genhtml lcov.info -o html --function-coverage --rc lcov_branch_coverage=1 >> lcov.log
+
+    lcov $lcov_cmd_dir --no-external --capture --output-file lcov.info --rc lcov_branch_coverage=1 >> lcov.log
+    genhtml lcov.info -o html --function-coverage --rc lcov_branch_coverage=1 --ignore-errors source >> lcov.log
 
     $PARSEGCOVCMD $PROG_DIR &> result_gcov.org
 

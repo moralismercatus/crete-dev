@@ -1,8 +1,14 @@
 #include "replay.h"
 #include <crete/common.h>
+#include <crete/tc-replay.h>
+
+#include <external/alphanum.hpp>
 
 #include <boost/filesystem/fstream.hpp>
 #include <boost/program_options.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 
 #include <string>
 #include <ctime>
@@ -11,6 +17,7 @@
 using namespace std;
 
 static const string replay_log_file = "crete.replay.log";
+static const string replay_launch_directory = "/tmp/crete-tc-replay-launch/";
 
 namespace crete
 {
@@ -18,7 +25,8 @@ namespace crete
 CreteReplay::CreteReplay(int argc, char* argv[]) :
     m_ops_descr(make_options()),
     m_cwd(fs::current_path()),
-    m_init_sandbox(true)
+    m_init_sandbox(true),
+    m_enable_log(false)
 {
     process_options(argc, argv);
     setup_launch();
@@ -36,8 +44,16 @@ po::options_description CreteReplay::make_options()
         ("tc-dir,t", po::value<fs::path>(), "test case directory")
         ("seed-only,s", "Only replay seed test case (\"1\") from each test case "
                 "directory")
+
         ("input-sandbox,j", po::value<fs::path>(), "input sandbox/jail directory")
         ("no-ini-sandbox,n", po::bool_switch(), "do not initialize sandbox to accumulate coverage info")
+
+        ("input-launch-directory", po::value<fs::path>(), "input launch directory")
+
+        ("environment,v", po::value<fs::path>(), "environment variables")
+        ("log,l", po::bool_switch(), "enable log the output of replayed programs")
+        ("exploitable-check,x", po::value<fs::path>(), "path to the output of exploitable-check")
+        ("explo-check-script,r", po::value<fs::path>(), "path to the script to check exploitable with gdb replay")
         ;
 
     return desc;
@@ -100,11 +116,72 @@ void CreteReplay::process_options(int argc, char* argv[])
 
     }
 
+    if(m_var_map.count("input-launch-directory"))
+    {
+        fs::path p = m_var_map["input-launch-directory"].as<fs::path>();
+
+        if(!fs::exists(p) && !fs::is_directory(p))
+        {
+            BOOST_THROW_EXCEPTION(Exception() << err::file_missing(p.string()));
+        }
+
+        m_input_launch = fs::canonical(p);
+    }
+
+    if(!m_input_sandbox.empty() && !m_input_launch.empty())
+    {
+        BOOST_THROW_EXCEPTION(Exception() << err::msg("Only one of \'input-sandbox\' and \'input-launch-directory\' is allowed\n"));;
+    }
+
+    if(m_var_map.count("environment"))
+    {
+        fs::path p = m_var_map["environment"].as<fs::path>();
+
+        if(!fs::exists(p) && !fs::is_regular(p))
+        {
+            BOOST_THROW_EXCEPTION(Exception() << err::file_missing(p.string()));
+        }
+
+        m_environment = p;
+    }
+
     if(m_var_map.count("seed-only"))
     {
         m_seed_mode = true;
     } else {
         m_seed_mode = false;
+    }
+
+    if(m_var_map.count("log"))
+    {
+        bool input = m_var_map["log"].as<bool>();
+
+        m_enable_log = input;
+    }
+
+    if(m_var_map.count("exploitable-check"))
+    {
+        m_exploitable_out = m_var_map["exploitable-check"].as<fs::path>();
+        if(!fs::exists(m_exploitable_out))
+        {
+            fs::create_directories(m_exploitable_out);
+        } else {
+            CRETE_EXCEPTION_ASSERT(fs::is_directory(m_exploitable_out),
+                    err::msg(m_exploitable_out.string() + "exists and is not a folder\n"));
+        }
+
+        if(!m_var_map.count("explo-check-script"))
+        {
+            BOOST_THROW_EXCEPTION(Exception() <<
+                    err::file_missing("\'explo-check-script\' is required with \'exploitable-check\'"));
+        }
+
+        fs::path p= m_var_map["explo-check-script"].as<fs::path>();
+        if(!fs::exists(p) && !fs::is_regular(p))
+        {
+            BOOST_THROW_EXCEPTION(Exception() << err::file_missing(p.string()));
+        }
+        m_exploitable_script = p;
     }
 
     if(!fs::exists(m_exec))
@@ -309,6 +386,39 @@ void CreteReplay::reset_sandbox()
     bp::status s = c.wait();
 }
 
+void CreteReplay::reset_launch_dir()
+{
+    assert(m_launch_directory == fs::path(replay_launch_directory) / fs::canonical(m_input_launch).filename());
+    if(fs::exists(m_launch_directory))
+    {
+        fs::remove_all(m_launch_directory);
+    }
+
+    fs::path launch_parent_dir = m_launch_directory.parent_path();
+    if(!fs::exists(launch_parent_dir))
+    {
+        fs::create_directories(launch_parent_dir);
+    }
+
+    bp::context ctx;
+    ctx.stdout_behavior = bp::capture_stream();
+    ctx.environment = bp::self::get_environment();
+
+    std::string exec = bp::find_executable_in_path("cp");
+    std::vector<std::string> args;
+    args.push_back(exec);
+    args.push_back("-r");
+    args.push_back(m_input_launch.string());
+    args.push_back(launch_parent_dir.string());
+
+    bp::child c = bp::launch(exec, args, ctx);
+
+    bp::pistream &is = c.get_stdout();
+
+    // TODO: xxx should check the return status to make sure the "cp" completed successfully
+    bp::status s = c.wait();
+}
+
 void CreteReplay::setup_launch()
 {
     // 0. Process m_config
@@ -332,9 +442,13 @@ void CreteReplay::setup_launch()
     };
 
     // 1. Setup m_launch_directory
-    if(m_input_sandbox.empty())
+    if(!m_input_sandbox.empty())
     {
-        // when no sandbox, m_exec_launch_dir is set to the parent folder of the executable,
+        m_launch_directory = fs::path("/tmp") / fs::canonical(m_input_sandbox).filename();
+    } else if (!m_input_launch.empty()) {
+        m_launch_directory = fs::path(replay_launch_directory) / fs::canonical(m_input_launch).filename();
+    } else {
+        // By default, m_exec_launch_dir is set to the parent folder of the executable,
         // unless that folder is not writable (then it will be the working
         // directory of crete-run)
         m_launch_directory = m_exec.parent_path();
@@ -342,8 +456,6 @@ void CreteReplay::setup_launch()
         {
             m_launch_directory = fs::current_path();
         }
-    } else {
-        m_launch_directory = fs::path("/tmp") / fs::canonical(m_input_sandbox).filename();
     }
 
     // 2. Set up m_launch_args
@@ -364,12 +476,27 @@ void CreteReplay::setup_launch()
     m_launch_ctx.output_behavior.insert(bp::behavior_map::value_type(STDERR_FILENO, bp::redirect_stream_to_stdout()));
     m_launch_ctx.input_behavior.insert(bp::behavior_map::value_type(STDIN_FILENO, bp::capture_stream()));
 
-    //TODO: xxx unified the environment, may use klee's env.sh
-    m_launch_ctx.environment = bp::self::get_environment();
-    m_launch_ctx.environment.erase("LD_PRELOAD");
-    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_replay_preload.so"));
-
     m_launch_ctx.work_directory = m_launch_directory.string();
+
+    if(!m_environment.empty())
+    {
+        assert(m_launch_ctx.environment.empty());
+        std::ifstream ifs (m_environment.string().c_str());
+        if(!ifs.good())
+            BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_environment.string()));
+
+        std::string env_name;
+        std::string env_value;
+        while(ifs >> env_name >> env_value)
+        {
+            m_launch_ctx.environment.insert(bp::environment::value_type(env_name, env_value));
+        }
+    } else {
+        m_launch_ctx.environment = bp::self::get_environment();
+    }
+    m_launch_ctx.environment.insert(bp::environment::value_type("LD_PRELOAD", "libcrete_replay_preload.so"));
+    m_launch_ctx.environment.erase("PWD");
+    m_launch_ctx.environment.insert(bp::environment::value_type("PWD", m_launch_ctx.work_directory));
 
     if(!m_input_sandbox.empty())
     {
@@ -393,6 +520,11 @@ void CreteReplay::setup_launch()
         m_guest_config_serialized = fs::path(CRETE_SANDBOX_PATH) / CRETE_CONFIG_SERIALIZED_PATH;
         m_current_tc = fs::path(CRETE_SANDBOX_PATH) / CRETE_REPLAY_CURRENT_TC;
     }
+
+    m_launch_ctx.environment.insert(bp::environment::value_type(CRETE_CONCOLIC_NAME_SUFFIX, "_p1"));
+
+    m_launch_ctx_secondary = m_launch_ctx;
+    m_secondary_cmds = guest_config.get_secondary_cmds();
 }
 
 // Get current date/time, format is YYYY-MM-DD.HH:mm:ss
@@ -467,6 +599,11 @@ static void timeout_handler(int signum)
     fprintf(stderr, "Send timeout (%d seconds) signal to its child process\n", monitored_timeout);
     assert(monitored_pid != 0);
     kill(monitored_pid, SIGUSR1);
+
+    // exit() can cause deadlock within signal handlers, but it is required for coverage
+    // Double kill the process
+    sleep(1);
+    kill(monitored_pid, SIGKILL);
 }
 
 static inline void init_timeout_handler()
@@ -478,14 +615,16 @@ static inline void init_timeout_handler()
     sigaction(SIGALRM, &sigact, NULL);
 }
 
-static inline void process_exit_status(fs::ofstream& log, int exit_status)
+// ret: true, if signal catched; false, if not
+static inline bool process_exit_status(fs::ofstream& log, int exit_status)
 {
     if(exit_status == 0)
     {
         log << "NORMAL EXIT STATUS.\n";
-        return;
+        return false;
     }
 
+    bool ret = false;
     if((exit_status > CRETE_EXIT_CODE_SIG_BASE) &&
             (exit_status < (CRETE_EXIT_CODE_SIG_BASE + SIGUNUSED)) )
     {
@@ -495,10 +634,71 @@ static inline void process_exit_status(fs::ofstream& log, int exit_status)
             log << "Replay Timeout\n";
         } else {
             log << "[Signal Caught] signum = " << signum << ", signame: " << strsignal(signum) << endl;
+            ret = true;
         }
     }
 
     log << "ABNORMAL EXIT STATUS: " << exit_status << endl;
+
+    return ret;
+}
+
+static vector<string> get_files_ordered(const fs::path& input)
+{
+    CRETE_EXCEPTION_ASSERT(fs::exists(input),
+            err::file_missing(input.string()));
+    assert(fs::is_directory(input));
+
+    // Sort the files alphabetically
+    vector<string> file_list;
+    for ( fs::directory_iterator itr( input );
+          itr != fs::directory_iterator();
+          ++itr ){
+        file_list.push_back(itr->path().string());
+    }
+
+    sort(file_list.begin(), file_list.end(), doj::alphanum_less<string>());
+
+    return file_list;
+}
+
+static bool execute_command_line(const std::string& cmd, const bp::posix_context& ctx)
+{
+    fprintf(stderr, "executing: %s\n", cmd.c_str());
+
+    bool ret = true;
+
+    std::vector<std::string> args;
+    boost::split(args, cmd, boost::is_any_of(" "), boost::token_compress_on);
+
+    std::string exec = args[0];
+    if(!fs::exists(exec))
+    {
+        exec = bp::find_executable_in_path(exec);
+    }
+
+    if(!fs::exists(exec))
+    {
+        fprintf(stderr, "[CRETE ERROR] [crete-run] command not found: %s\n", exec.c_str());
+        assert(0);
+    }
+
+    bp::posix_child c = bp::posix_launch(exec, args, ctx);
+
+    monitored_pid = c.get_id();
+    assert(monitored_timeout != 0);
+    alarm(monitored_timeout);
+
+    bp::status s = c.wait();
+
+    alarm(0);
+
+    if(!(s.exited() && (s.exit_status() == 0)))
+    {
+        ret = false;
+    }
+
+    return ret;
 }
 
 void CreteReplay::replay()
@@ -506,8 +706,16 @@ void CreteReplay::replay()
     init_timeout_handler();
 
     // Read all test cases to replay
-    vector<TestCase> tcs = retrieve_tests(m_tc_dir.string());
-    fs::ofstream ofs_replay_log(m_cwd / replay_log_file, std::ios_base::app);
+    vector<string> test_list = get_files_ordered(m_tc_dir);
+
+    fs::ofstream ofs_replay_log;
+
+    if(m_enable_log)
+    {
+        ofs_replay_log.open(m_cwd / replay_log_file, std::ios_base::app);
+    } else {
+        ofs_replay_log.open("/dev/null");
+    }
 
     ofs_replay_log << "Replay Summary: [" << currentDateTime() << "]\n"
             << "Executable path: " << m_exec.string() << endl
@@ -515,13 +723,14 @@ void CreteReplay::replay()
             << "Guest config path: " << m_config.string() << endl
             << "Working directory: " << m_cwd.string() << endl
             << "Launch direcotory: " << m_launch_directory.string() << endl
-            << "Number of test cases: " << tcs.size() << endl
+            << "Number of test cases: " << test_list.size() << endl
             << endl;
 
     uint64_t replayed_tc_count = 1;
-    for(vector<TestCase>::const_iterator it = tcs.begin();
-            it != tcs.end(); ++it) {
-        if(m_seed_mode && (it != tcs.begin()))
+    for (vector<string>::const_iterator it(test_list.begin()), it_end(test_list.end());
+            it != it_end; ++it)
+    {
+        if(m_seed_mode && (replayed_tc_count != 1))
         {
             break;
         }
@@ -536,16 +745,14 @@ void CreteReplay::replay()
                 reset_sandbox();
             }
 
+            if(!m_input_launch.empty())
+            {
+                reset_launch_dir();
+            }
 
             // write replay_current_tc, for replay-preload to use
             fs::remove(m_current_tc);
-            std::ofstream ofs(m_current_tc.string().c_str());
-            if(!ofs.good())
-            {
-                BOOST_THROW_EXCEPTION(Exception() << err::file_open_failed(m_current_tc.string()));
-            }
-            it->write(ofs);
-            ofs.close();
+            fs::copy(*it, m_current_tc);
 
             // copy guest-config, for replay-preload to use
             try
@@ -582,21 +789,240 @@ void CreteReplay::replay()
             ofs_replay_log << "Output from Launched executable:\n";
             bp::pistream& is = proc.get_stdout();
             std::string line;
+            stringstream ss_prog_out;
             while(getline(is, line))
             {
                 ofs_replay_log << line << endl;
+                ss_prog_out << line << endl;
             }
 #endif
 
             bp::status status = proc.wait();
             alarm(0);
-            process_exit_status(ofs_replay_log, status.exit_status());
+
+            bool signal_caught;
+            if(status.exited())
+            {
+                signal_caught = process_exit_status(ofs_replay_log, status.exit_status());
+            } else {
+                // When the child process is not terminated from exit()/_exit(),
+                // assuming there is a signal caught.
+                signal_caught = true;
+            }
+
+            if(signal_caught)
+            {
+                check_exploitable(*it, ss_prog_out.str());
+            }
         }
 
+        // execute secondary cmds
+        {
+            fprintf(stderr, "sec_cmds.size() = %lu\n", m_secondary_cmds.size());
+
+            unsigned int sec_cmd_count = 1;
+            for(vector<string>::const_iterator it = m_secondary_cmds.begin();
+                    it != m_secondary_cmds.end(); ++it) {
+                m_launch_ctx_secondary.environment.erase(CRETE_CONCOLIC_NAME_SUFFIX);
+                m_launch_ctx_secondary.environment.insert(bp::environment::value_type(
+                        CRETE_CONCOLIC_NAME_SUFFIX, "_p" + boost::lexical_cast<std::string>(++sec_cmd_count)));
+
+                bool cmd_executed = execute_command_line(*it, m_launch_ctx_secondary);
+                if(!cmd_executed)
+                {
+                    fprintf(stderr, "[CRETE Warning][crete-replay] \'%s\' executed unsuccessfully.\n", it->c_str());
+                }
+            }
+        }
         ofs_replay_log << "====================================================================\n";
     }
 
     collect_gcov_result();
+}
+
+// FIXME: xxx add timeout to deal with GDB hanging
+static vector<string> run_gdb_script(const CheckExploitable& ck_exp,
+        const string& script)
+{
+    cerr << "run_gdb_script() entered\n";
+
+    bp::context ctx;
+    ctx.stdout_behavior = bp::capture_stream();
+    ctx.stderr_behavior = bp::redirect_stream_to_stdout();
+    ctx.stdin_behavior = bp::capture_stream();
+    ctx.work_directory = ck_exp.m_p_launch;
+
+    fs::copy_file(CRETE_TC_REPLAY_GDB_SCRIPT,
+            fs::path(ctx.work_directory) / CRETE_TC_REPLAY_GDB_SCRIPT,
+            fs::copy_option::overwrite_if_exists);
+
+    std::string exec = bp::find_executable_in_path("gdb");
+    std::vector<std::string> args;
+    args.push_back("gdb");
+    args.push_back("-x");
+    args.push_back(script);
+
+    bp::child c = bp::launch(exec, args, ctx);
+
+    monitored_pid = c.get_id();
+    assert(monitored_timeout != 0);
+    alarm(monitored_timeout*3);
+
+    bp::pistream &is = c.get_stdout();
+    std::string line;
+
+    vector<string> gdb_out;
+    while (std::getline(is, line))
+    {
+        gdb_out.push_back(line);
+    }
+
+    alarm(0);
+
+    cerr << "run_gdb_script() finished\n";
+    return gdb_out;
+}
+
+static fs::path prepare_explo_dir(const CheckExploitable& ck_exp,
+        const CheckExploitableResult& result, const fs::path out_dir)
+{
+    CRETE_EXCEPTION_ASSERT(fs::is_directory(out_dir),
+            err::file_missing(out_dir.string()));
+
+    fs::path parsed_explo = out_dir;
+    if(!fs::exists(parsed_explo))
+    {
+        fs::create_directories(parsed_explo);
+    } else {
+        CRETE_EXCEPTION_ASSERT(fs::is_directory(parsed_explo),
+                err::msg(parsed_explo.string() + "exists and is not a folder\n"));
+    }
+
+    fs::path prog_out = parsed_explo / fs::path(ck_exp.m_p_exec).filename();
+    if(!fs::exists(prog_out))
+    {
+        fs::create_directories(prog_out);
+    } else {
+        CRETE_EXCEPTION_ASSERT(fs::is_directory(parsed_explo),
+                err::msg(prog_out.string() + "exists and is not a folder\n"));
+    }
+
+    fs::path explo_out = prog_out / (result.m_exp_ty_msg + "-" + result.m_hash);
+    if(fs::exists(explo_out))
+    {
+        CRETE_EXCEPTION_ASSERT(fs::is_directory(parsed_explo),
+                err::msg(explo_out.string() + "exists and is not a folder\n"));
+
+        explo_out = explo_out / "others";
+        if(!fs::exists(explo_out))
+        {
+            fs::create_directories(explo_out);
+        } else {
+            CRETE_EXCEPTION_ASSERT(fs::is_directory(parsed_explo),
+                    err::msg(explo_out.string() + "exists and is not a folder\n"));
+        }
+
+        for (int i = 1; ; i++) {
+            fs::path dirPath = explo_out / boost::lexical_cast<std::string>(i);
+            if(!fs::exists(dirPath)) {
+                explo_out = dirPath.string();
+                break;
+            }
+        }
+    }
+
+    assert(!fs::exists(explo_out));
+    fs::create_directories(explo_out);
+
+    return explo_out;
+}
+
+static void write_exploitable_log(const CheckExploitable& ck_exp,
+        const vector<string>& gdb_out, const fs::path out_dir,
+        const fs::path& tc_path, const string& replay_log)
+{
+    CheckExploitableResult result(gdb_out);
+
+    fs::path explo_out = prepare_explo_dir(ck_exp, result, out_dir);
+    assert(fs::is_directory(explo_out));
+
+    fs::path exe_launch_dir = ck_exp.m_p_launch;
+    // 1. gdb_script
+    fs::copy_file(exe_launch_dir / CRETE_TC_REPLAY_GDB_SCRIPT,
+            explo_out / CRETE_TC_REPLAY_GDB_SCRIPT);
+
+    // 2. all files
+    for(uint64_t i = 0; i < ck_exp.m_files.size(); ++i)
+    {
+        fs::copy_file(exe_launch_dir / ck_exp.m_files[i],
+                    explo_out / ck_exp.m_files[i]);
+    }
+
+    fs::copy_file(exe_launch_dir / ck_exp.m_stdin_file,
+                explo_out / ck_exp.m_stdin_file);
+
+    // 3. summary_log
+    ofstream ofs((explo_out / CRETE_EXPLO_SUMMARY_LOG).string().c_str());
+
+    ofs << "================\n"
+        << "Exploitable log:\n"
+        << "================\n\n";
+
+    ofs << "Exploitability Classification: " << result.m_exp_ty_msg << endl
+        << "Description: " << result.m_description << endl
+        << "Explanation: " << result.m_explanation << endl << endl
+        << "Note: generated by \"GDB 'exploitable' plugin\" (https://github.com/jfoote/exploitable)"
+        << endl << endl;
+
+    ofs << "=================\n"
+        << "Complete GDB log:\n"
+        << "=================\n\n";
+
+    for(uint64_t i = 0; i < gdb_out.size(); ++i)
+    {
+        ofs << gdb_out[i] << endl;
+    }
+
+    ofs << "==========\n"
+        << "CRETE log:\n"
+        << "==========\n\n";
+
+    ofs << "crete-tc: " << tc_path.string() << endl << endl;
+
+    ofs << "-----------------------\n"
+        << "crete-tc-replay output:\n"
+        << "-----------------------\n\n"
+        << replay_log << endl;
+
+
+    ofs.close();
+}
+
+void CreteReplay::check_exploitable(const fs::path& tc_path,
+        const string& replay_log) const
+{
+    if(m_exploitable_script.empty())
+        return;
+
+    assert(m_input_sandbox.empty() &&
+            "[CRETE ERROR] NOT support check for exploitable with sandbox replay.\n");
+
+    cerr << "check_exploitable: " << tc_path.string() << endl;
+    assert(fs::exists(CRETE_TC_REPLAY_CK_EXP_INFO));
+    ifstream ifs(CRETE_TC_REPLAY_CK_EXP_INFO, ios_base::binary);
+    boost::archive::binary_iarchive ia(ifs);
+
+    CheckExploitable ck_exp;
+    ia >> ck_exp;
+
+    assert(ck_exp.m_p_launch == m_launch_directory.string());
+    ck_exp.m_p_exploitable_script = m_exploitable_script.string();
+    ck_exp.gen_gdb_script(CRETE_TC_REPLAY_GDB_SCRIPT);
+
+    vector<string> gdb_out = run_gdb_script(ck_exp, CRETE_TC_REPLAY_GDB_SCRIPT);
+
+    write_exploitable_log(ck_exp, gdb_out, m_exploitable_out,
+            tc_path, replay_log);
 }
 
 } // namespace crete
