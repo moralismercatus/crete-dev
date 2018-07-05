@@ -184,7 +184,7 @@ namespace crete
         priority_(0),
         m_patch(false),
         m_issue_index(0),
-        m_base_tc_issue_index(0)
+        m_base_tc_issue_index(0),
         uuid_( boost::uuids::random_generator()() )
     {
     }

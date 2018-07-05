@@ -184,8 +184,6 @@ auto NodeDriver<Node>::run_listener() -> void
 
             std::rethrow_exception(std::current_exception());
         }
-
-        transmission_pending_->acquire() = false;
     }
 }
 

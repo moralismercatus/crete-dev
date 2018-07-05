@@ -378,14 +378,6 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
     // Cont: I could ad hoc it by keeping a history_ variable that I append to for each state, and condense to the last N.
     // Cont: history_ could be stored using boost::circular_buffer, or std::vector with a mod operator, to keep it's size down to N.
 
-    if(dispatch_options_.mode.distributed
-            && !fsm.is_test_timeout_) // FIXME: xxx "child_->acquire()->get_stdout().rdbuf()" will cause deadlock when child is not killed
-    {
-        ss << "QEMU stdout/stderr:\n"
-           << child_->acquire()->get_stdout().rdbuf()
-           << '\n';
-    }
-
     if(dynamic_cast<VMTimeoutException*>(&e))
     {
         auto etimeout = dynamic_cast<VMTimeoutException*>(&e);
@@ -394,7 +386,13 @@ void QemuFSM_::exception_caught(Event const&,FSM& fsm,std::exception& e)
            << etimeout->serial_log << '\n';
     }
 
-    fsm.is_test_timeout_ = false;
+    if(dispatch_options_.mode.distributed)
+            
+    {
+        ss << "QEMU stdout/stderr:\n"
+           << child_->acquire()->get_stdout().rdbuf()
+           << '\n';
+    }
 
     error_log_.log = ss.str();
 
