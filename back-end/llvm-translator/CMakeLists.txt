@@ -29,7 +29,7 @@ ExternalProject_Add(
         --cc=clang
         --cxx=clang++
         "--extra-ldflags=-L${CMAKE_BINARY_DIR}/bin -L${CMAKE_BINARY_DIR}/bin/boost"
-        "--extra-cflags=-mno-sse3 -g -I${CMAKE_SOURCE_DIR}/lib/include -I${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_59_0 -DTCG_LLVM_OFFLINE"
+        "--extra-cflags=-mno-sse3 -g -I${CMAKE_SOURCE_DIR}/lib/include -I${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0 -DTCG_LLVM_OFFLINE"
         "--extra-cxxflags=-mno-sse3 -O2 -DTCG_LLVM_OFFLINE -DUSE_LLVM_3_4 -D_GLIBCXX_USE_CXX11_ABI=0"
 
         BUILD_COMMAND make -j7

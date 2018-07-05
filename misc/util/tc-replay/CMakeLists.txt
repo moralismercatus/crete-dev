@@ -4,5 +4,5 @@ project(tc-replay)
 
 add_executable(crete-tc-replay replay.cpp)
 
-target_link_libraries(crete-tc-replay crete_test_case boost_system boost_filesystem boost_serialization boost_program_options stdc++)
+target_link_libraries(crete-tc-replay crete_test_case boost_system boost_filesystem boost_serialization boost_program_options pthread stdc++)
 add_dependencies(crete-tc-replay crete_test_case boost)

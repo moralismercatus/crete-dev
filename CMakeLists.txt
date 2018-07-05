@@ -8,8 +8,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 
-include_directories("${PROJECT_SOURCE_DIR}/lib/include" "${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_59_0")
-link_directories("${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_59_0/stage/lib")
+include_directories("${PROJECT_SOURCE_DIR}/lib/include" "${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0")
+link_directories("${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0/stage/lib")
 
 add_subdirectory(lib)
 add_subdirectory(back-end)
@@ -50,7 +50,7 @@ install (FILES "${PROJECT_SOURCE_DIR}/back-end/llvm-translator/llvm-translator-q
          PERMISSIONS WORLD_READ OWNER_READ OWNER_WRITE
          RENAME crete-qemu-2.3-op-helper-x86_64.bc)
 
-install (DIRECTORY "/home/chenbo/MSoftware/libs/boost_1_59_0/stage/lib/"
+install (DIRECTORY "/home/chenbo/MSoftware/libs/boost_1_67_0/stage/lib/"
          DESTINATION lib
          PATTERN ".*.1.59.0"
          PERMISSIONS WORLD_READ OWNER_READ OWNER_WRITE)
