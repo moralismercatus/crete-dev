@@ -99,6 +99,7 @@ tcg-llvm-offline/tcg-llvm-offline.o: QEMU_CXXFLAGS+=$(LLVM_CXXFLAGS) -fno-inline
 obj-y += tcg-llvm-offline/tcg-llvm-offline.o
 
 LIBS += -lcrete_test_case
+LIBS += -lfmt -rdynamic -ldl
 runtime-dump/runtime-dump.o: QEMU_CXXFLAGS+=$(LLVM_CXXFLAGS) -fno-inline
 obj-y += runtime-dump/runtime-dump.o
 

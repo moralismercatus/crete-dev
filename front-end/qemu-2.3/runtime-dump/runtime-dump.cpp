@@ -1,3 +1,5 @@
+#include <fmt/format.h>
+
 #include "runtime-dump.h"
 #include "tci_analyzer.h"
 #include "crete-debug.h"
@@ -12,6 +14,7 @@ extern "C" {
 
 #include <crete/test_case.h>
 #include <crete/stacktrace.h>
+#include <crete/assert.hpp>
 
 #include <stdexcept>
 #include <boost/filesystem/operations.hpp>
@@ -74,6 +77,8 @@ RuntimeEnv::RuntimeEnv()
   m_qemu_default_br_skipped(false),
   m_new_tb(false)
 {
+    std::set_terminate([](){ CRETE_ABORT_MSG("std::terminate called"); });
+
     m_tlo_ctx_cpuState = new uint8_t [sizeof(CPUArchState)];
 
     m_cpuState_post_insterest.first = false;

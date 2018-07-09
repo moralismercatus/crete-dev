@@ -10,7 +10,7 @@ include(ExternalProject)
 set(KLEE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CMAKE_SOURCE_DIR}/lib/include/ -I${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0 -DCRETE_CONFIG=1 -D_GLIBCXX_USE_CXX11_ABI=0")
 set(KLEE_C_FLAGS "${CMAKE_C_FLAGS} -I${CMAKE_SOURCE_DIR}/lib/include/ -I${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0 -DCRETE_CONFIG=1")
 # -I/usr/include/glib-2.0/ -I/usr/lib/x86_64-linux-gnu/glib-2.0/include/
-set(KLEE_LD_FLAGS "-L${CMAKE_BINARY_DIR}/bin -L${CMAKE_BINARY_DIR}/bin/boost")
+set(KLEE_LD_FLAGS "-L${CMAKE_BINARY_DIR}/bin -L${CMAKE_BINARY_DIR}/bin/boost -lfmt")
 
 execute_process(COMMAND which llvm-config-3.4
   OUTPUT_VARIABLE LLVMCONFIG_PATH

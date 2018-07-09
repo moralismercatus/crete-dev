@@ -6,4 +6,4 @@ project(debug)
 
 add_executable(crete-debug debug.cpp asm_mode.cpp compare-test.cpp)
 
-target_link_libraries(crete-debug crete_test_case crete_proc_reader boost_system boost_filesystem boost_regex boost_program_options stdc++)
+target_link_libraries(crete-debug crete_test_case crete_proc_reader boost_system boost_filesystem boost_regex boost_program_options stdc++ fmt dl)

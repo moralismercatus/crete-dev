@@ -15,11 +15,13 @@ ExternalProject_Add(
 
 	CONFIGURE_COMMAND
         ./configure
+        # --enable-debug
         --enable-tcg-interpreter
-        --target-list=i386-softmmu,x86_64-softmmu
-        "--extra-cflags=-I${CMAKE_SOURCE_DIR}/lib/include -I${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0 -D_GLIBCXX_USE_CXX11_ABI=0"
-        "--extra-ldflags=-L${CMAKE_BINARY_DIR}/bin -L${CMAKE_BINARY_DIR}/bin/boost"
-        "--extra-cxxflags=-D_GLIBCXX_USE_CXX11_ABI=0"
+        # --target-list=i386-softmmu,x86_64-softmmu
+        --target-list=x86_64-softmmu
+        "--extra-cflags=-g -I${CMAKE_SOURCE_DIR}/lib/include -I${CMAKE_BINARY_DIR}/lib/boost/boost-prefix/src/boost_1_67_0 -D_GLIBCXX_USE_CXX11_ABI=0"
+        "--extra-ldflags=-L${CMAKE_BINARY_DIR}/bin -L${CMAKE_BINARY_DIR}/bin/boost -lfmt -rdynamic -ldl"
+        "--extra-cxxflags=-02 -g -std=c++14 -D_GLIBCXX_USE_CXX11_ABI=0"
 
 	BUILD_COMMAND make -j7
 
@@ -28,7 +30,7 @@ ExternalProject_Add(
         ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/qemu-2.3/x86_64-softmmu/crete-qemu-2.3-system-x86_64 ${CMAKE_BINARY_DIR}/bin/crete-qemu-2.3-system-x86_64
 	)
 
-add_dependencies(qemu-2.3 crete_test_case boost)
+add_dependencies(qemu-2.3 crete_test_case boost fmtlib)
 
 add_custom_target(qemu-2.3-remake ALL
   COMMAND  make -j7
